@@ -3,3 +3,6 @@
 
 # PDF fixtures contain byte offsets and must never undergo text conversion.
 *.pdf binary
+
+# Markdown allows trailing double spaces for hard line breaks.
+*.md whitespace=-trailing-space
