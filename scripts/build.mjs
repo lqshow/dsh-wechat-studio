@@ -38,7 +38,7 @@ const pdf = {
 }
 
 const imageCrop = {
-  stdin: { contents: "export { cropCover } from './src/image-crop.js'", resolveDir: process.cwd() },
+  stdin: { contents: "export { cropCover, normalizeImageFormat } from './src/image-crop.js'", resolveDir: process.cwd() },
   outfile: 'dist/image-crop.mjs',
   bundle: true,
   format: 'esm',

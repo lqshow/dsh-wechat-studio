@@ -8,8 +8,9 @@ import { deflateSync } from 'node:zlib'
 import { createArticle } from '../src/article.js'
 import { callModel, COVER_SKILL_DIR } from '../src/ai.js'
 import { buildCoverPromptRequest } from '../src/cover-prompt.js'
-import { coverDownloadName, generateArkCover, generateBailianCover, generateCoverImage, generateMinimaxCover, readCover, saveCover } from '../src/cover.js'
-import { BAILIAN_SIZES, COVER_PROVIDERS, INLINE_IMAGE_SIZES, MINIMAX_SIZES, modelsFor, providerFormats } from '../src/cover-options.js'
+import { coverDownloadName, generateArkCover, generateBailianCover, generateCoverImage, generateGeminiCover, generateMinimaxCover, normalizeGeminiBaseUrl, readCover, saveCover } from '../src/cover.js'
+import { BAILIAN_SIZES, COVER_PROVIDERS, GEMINI_DEFAULT_BASE_URL, INLINE_IMAGE_SIZES, MINIMAX_SIZES, modelsFor, providerFormats, providerMeta } from '../src/cover-options.js'
+import { normalizeImageFormat } from '../src/image-crop.js'
 import { COVER_STYLES, CUSTOM_COVER_STYLE_LIMITS, extractTemplateSlots, hasPortraitMarkers, isCustomStyleId, resolveCoverStyleName } from '../src/cover-styles.js'
 import { PNG } from 'pngjs'
 import { AUTHOR_SAMPLE_PORTRAIT, publicSettings, readSettings, updateSettings } from '../src/settings.js'
@@ -233,9 +234,9 @@ async function coverHost({ provider, key, model, fetchImpl, llm }) {
   const article = createArticle({ markdown: MD })
   await store.update(state => { state.articles.push(article); state.currentId = article.id })
   const settings = { coverProvider: provider }
-  if (provider === 'bailian') { settings.bailianKey = key; if (model) settings.bailianModel = model }
-  else if (provider === 'minimax') { settings.minimaxKey = key; if (model) settings.minimaxModel = model }
-  else { settings.arkKey = key; if (model) settings.arkModel = model }
+  const meta = providerMeta(provider)
+  settings[meta.keyField] = key
+  if (model) settings[meta.modelField] = model
   await updateSettings(store.root, settings)
   const services = llm ? { llm, agentDefaultModel: { currentSelection: () => ({ provider: 'p', model: 'm' }) } } : {}
   const deps = { ctx: { get: name => services[name] ?? null }, store, pipeline: { job: () => null }, fetchImpl }
@@ -638,6 +639,221 @@ test('MiniMax 设置与封面路由：持久化脱敏、edits/generations 分流
   assert.equal(run.errors.length, 1)
   assert.match(run.errors[0], /600 秒.*计费/)
   assert.doesNotMatch(run.errors[0], /请重试/)
+})
+
+test('Gemini 提供方选项与 normalizeImageFormat 格式转换', async () => {
+  assert.ok(COVER_PROVIDERS.some(p => p.id === 'gemini' && p.name === 'Google Gemini'))
+  assert.deepEqual(modelsFor('gemini').map(m => m.id), [
+    'gemini-nano-banana-2.1',
+    'gemini-3.1-flash-image',
+    'gemini-3-pro-image',
+  ])
+  const meta = providerMeta('gemini')
+  assert.equal(meta.modelField, 'geminiModel')
+  assert.equal(meta.keyField, 'geminiKey')
+  assert.equal(meta.keySetField, 'geminiKeySet')
+  assert.equal(meta.baseUrlField, 'geminiBaseUrl')
+  assert.equal(meta.defaultBaseUrl, GEMINI_DEFAULT_BASE_URL)
+  assert.equal(meta.envKey, 'GEMINI_API_KEY')
+  assert.deepEqual(providerFormats('gemini'), ['png', 'jpeg'])
+  assert.equal(INLINE_IMAGE_SIZES.gemini, '2K')
+
+  const png = makePng(94, 40)
+  assert.strictEqual(normalizeImageFormat(png, 'png'), png, 'PNG -> PNG 应原样返回')
+  const asJpeg = normalizeImageFormat(png, 'jpeg')
+  assert.equal(asJpeg.toString('hex', 0, 3), 'ffd8ff', 'PNG -> JPEG 应输出有效 JPEG')
+  assert.strictEqual(normalizeImageFormat(asJpeg, 'jpeg'), asJpeg, 'JPEG -> JPEG 应原样返回')
+  const backToPng = normalizeImageFormat(asJpeg, 'png')
+  assert.equal(backToPng.toString('hex', 0, 8), '89504e470d0a1a0a', 'JPEG -> PNG 应输出有效 PNG')
+  const parsed = PNG.sync.read(backToPng)
+  assert.equal(parsed.width, 94)
+  assert.equal(parsed.height, 40)
+  assert.throws(() => normalizeImageFormat(Buffer.from('not-an-image'), 'png'), /Invalid image|格式/)
+})
+
+test('Gemini Nano Banana：文生图、自定义 Base URL、参考图（HTTPS & data:）、格式转码与错误映射', async () => {
+  // normalizeGeminiBaseUrl
+  assert.equal(normalizeGeminiBaseUrl(''), GEMINI_DEFAULT_BASE_URL)
+  assert.equal(normalizeGeminiBaseUrl('  https://proxy.example.com/  '), 'https://proxy.example.com')
+  assert.equal(normalizeGeminiBaseUrl('https://proxy.example.com/v1beta/'), 'https://proxy.example.com')
+  assert.equal(normalizeGeminiBaseUrl('https://proxy.example.com/gemini/v1beta'), 'https://proxy.example.com/gemini')
+  assert.throws(() => normalizeGeminiBaseUrl('http://proxy.example.com'), err => err.status === 400 && /https/i.test(err.message))
+  assert.throws(() => normalizeGeminiBaseUrl('https://user:pass@proxy.example.com'), err => err.status === 400)
+
+  const png = makePng(94, 40)
+  const jpeg = normalizeImageFormat(png, 'jpeg')
+  const calls = []
+  const okFetch = (mimeType, buf) => async (url, init) => {
+    calls.push({ url, init })
+    return Response.json({
+      candidates: [{
+        content: {
+          role: 'model',
+          parts: [{ inlineData: { mimeType, data: buf.toString('base64') } }],
+        },
+        finishReason: 'STOP',
+      }],
+    })
+  }
+
+  // 默认官方地址 + x-goog-api-key 请求头 + 1K/1.5K/2K 映射 + JPEG 自动转 PNG
+  const outPng = await generateGeminiCover('画一张封面', {
+    apiKey: 'AIza-secret-123',
+    model: 'gemini-nano-banana-2.1',
+    resolution: '1.5K',
+    format: 'png',
+  }, okFetch('image/jpeg', jpeg))
+  assert.equal(outPng.toString('hex', 0, 8), '89504e470d0a1a0a', '服务端返回 JPEG 时应自动转为请求的 PNG')
+  assert.equal(calls[0].url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-nano-banana-2.1:generateContent')
+  assert.ok(!calls[0].url.includes('AIza-secret-123'), 'API Key 不能出现在 URL 中')
+  assert.equal(calls[0].init.headers['x-goog-api-key'], 'AIza-secret-123')
+  assert.equal(calls[0].init.redirect, 'error')
+  const body0 = JSON.parse(calls[0].init.body)
+  assert.deepEqual(body0.generationConfig, {
+    responseModalities: ['IMAGE'],
+    imageConfig: { aspectRatio: '21:9', imageSize: '2K' },
+  })
+  assert.deepEqual(body0.contents, [{ role: 'user', parts: [{ text: '画一张封面' }] }])
+
+  // 自定义 Base URL（含 /v1beta/ 后缀）+ 1K + PNG 自动转 JPEG + generateCoverImage 分发
+  calls.length = 0
+  const outJpeg = await generateCoverImage('gemini', '封面2', {
+    apiKey: 'AIza-secret-123',
+    model: 'gemini-3-pro-image',
+    resolution: '1K',
+    format: 'jpeg',
+    baseUrl: 'https://relay.example.com/v1beta/',
+    aspectRatio: '16:9',
+  }, okFetch('image/png', png))
+  assert.equal(outJpeg.toString('hex', 0, 3), 'ffd8ff', '服务端返回 PNG 时应自动转为请求的 JPEG')
+  assert.equal(calls[0].url, 'https://relay.example.com/v1beta/models/gemini-3-pro-image:generateContent')
+  assert.deepEqual(JSON.parse(calls[0].init.body).generationConfig.imageConfig, { aspectRatio: '16:9', imageSize: '1K' })
+
+  // 参考图 1：data: URL 不触发下载，直接作为 inlineData
+  calls.length = 0
+  const refDataUrl = `data:image/png;base64,${png.toString('base64')}`
+  await generateGeminiCover('按样式生成', {
+    apiKey: 'AIza-secret-123',
+    model: 'gemini-3.1-flash-image',
+    resolution: '2K',
+    format: 'png',
+    referenceImage: refDataUrl,
+  }, okFetch('image/png', png))
+  assert.equal(calls.length, 1, 'data: 参考图不应发起额外下载请求')
+  const refParts = JSON.parse(calls[0].init.body).contents[0].parts
+  assert.equal(refParts.length, 2)
+  assert.deepEqual(refParts[0], { inlineData: { mimeType: 'image/png', data: png.toString('base64') } })
+  assert.deepEqual(refParts[1], { text: '按样式生成' })
+
+  // 参考图 2：https:// URL 先下载再作为 inlineData
+  calls.length = 0
+  const refFetch = async (url, init) => {
+    calls.push({ url, init })
+    if (url === 'https://example.com/portrait.jpg') {
+      return new Response(jpeg, { status: 200, headers: { 'content-type': 'image/jpeg' } })
+    }
+    return Response.json({
+      candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }] } }],
+    })
+  }
+  await generateGeminiCover('按人物生成', {
+    apiKey: 'AIza-secret-123',
+    model: 'gemini-nano-banana-2.1',
+    resolution: '2K',
+    format: 'png',
+    referenceImage: 'https://example.com/portrait.jpg',
+  }, refFetch)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].url, 'https://example.com/portrait.jpg')
+  const httpsParts = JSON.parse(calls[1].init.body).contents[0].parts
+  assert.deepEqual(httpsParts[0], { inlineData: { mimeType: 'image/jpeg', data: jpeg.toString('base64') } })
+
+  // 错误映射与密钥脱敏
+  const errReply = (status, body) => async () => Response.json(body, { status })
+  const baseOpts = { apiKey: 'AIza-leak-999', model: 'gemini-nano-banana-2.1', resolution: '2K', format: 'png' }
+  await assert.rejects(generateGeminiCover('p', baseOpts, errReply(401, { error: { message: 'API key not valid' } })), /鉴权失败|API Key/)
+  await assert.rejects(generateGeminiCover('p', baseOpts, errReply(403, { error: { message: 'Permission denied' } })), /鉴权失败|API Key/)
+  await assert.rejects(generateGeminiCover('p', baseOpts, errReply(400, { error: { status: 'INVALID_ARGUMENT', message: 'API key not valid. Please pass a valid API key.' } })), /鉴权失败|API Key/)
+  await assert.rejects(generateGeminiCover('p', baseOpts, errReply(404, { error: { message: 'Model not found' } })), /模型不存在|暂不可用/)
+  await assert.rejects(generateGeminiCover('p', baseOpts, errReply(429, { error: { message: 'Quota exceeded' } })), /限流|额度|付费层级/)
+  await assert.rejects(generateGeminiCover('p', baseOpts, errReply(400, { error: { message: 'User location is not supported for the API use.' } })), /地区|自定义 API 地址/)
+  await assert.rejects(
+    generateGeminiCover('p', baseOpts, errReply(500, { error: { message: 'boom AIza-leak-999 x-goog-api-key AIza-leak-999' } })),
+    err => /HTTP 500/.test(err.message) && !err.message.includes('AIza-leak-999'),
+  )
+  await assert.rejects(
+    generateGeminiCover('p', baseOpts, errReply(200, { candidates: [{ finishReason: 'IMAGE_SAFETY' }] })),
+    /内容安全审核/,
+  )
+  await assert.rejects(
+    generateGeminiCover('p', baseOpts, errReply(200, { promptFeedback: { blockReason: 'SAFETY' } })),
+    /内容安全审核/,
+  )
+  await assert.rejects(
+    generateGeminiCover('p', baseOpts, errReply(200, { candidates: [{ content: { parts: [{ text: 'no image' }] } }] })),
+    /未返回可保存的封面/,
+  )
+})
+
+test('Gemini 设置：持久化脱敏、Base URL 规范化与非法值拦截', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ws-gemini-settings-'))
+  const def = await readSettings(root)
+  assert.equal(def.geminiModel, 'gemini-nano-banana-2.1')
+  assert.equal(def.geminiKey, '')
+  assert.equal(def.geminiBaseUrl, '')
+
+  const updated = await updateSettings(root, {
+    coverProvider: 'gemini',
+    geminiModel: 'gemini-3-pro-image',
+    geminiKey: '  AIza-secret-8888  ',
+    geminiBaseUrl: '  https://proxy.example.com/v1beta/  ',
+  })
+  const pub = publicSettings(updated)
+  assert.equal(pub.coverProvider, 'gemini')
+  assert.equal(pub.geminiModel, 'gemini-3-pro-image')
+  assert.equal(pub.geminiKeySet, true)
+  assert.equal(pub.geminiBaseUrl, 'https://proxy.example.com')
+  assert.ok(!JSON.stringify(pub).includes('AIza-secret-8888'))
+  const reread = await readSettings(root)
+  assert.equal(reread.geminiKey, 'AIza-secret-8888')
+  assert.equal(reread.geminiBaseUrl, 'https://proxy.example.com')
+
+  // 清空 Base URL 恢复默认
+  const cleared = publicSettings(await updateSettings(root, { geminiBaseUrl: '' }))
+  assert.equal(cleared.geminiBaseUrl, '')
+
+  // 非法模型与非法 Base URL 拦截
+  await assert.rejects(updateSettings(root, { geminiModel: modelsFor('ark')[0].id }), /Google Gemini 封面模型/)
+  await assert.rejects(updateSettings(root, { geminiBaseUrl: 'http://insecure.example.com' }), /https/i)
+  await assert.rejects(updateSettings(root, { geminiBaseUrl: 'https://u:p@proxy.example.com' }), /账号密码|https/i)
+
+  // 封面路由：缺 Key 报错、自定义 Base URL 透传与正常生成
+  const noKey = await coverHost({ provider: 'gemini', key: '' })
+  assert.match((await noKey.request('cover/generate', { id: noKey.article.id, style: 'classic', format: 'png' })).error, /Google Gemini API Key/)
+  assert.match((await noKey.request('cover/generate', { id: noKey.article.id, style: 'classic', format: 'jpeg' })).error, /Google Gemini API Key/)
+
+  const png = makePng(94, 40)
+  const calls = []
+  const host = await coverHost({
+    provider: 'gemini',
+    key: 'AIza-route-key',
+    model: 'gemini-3-pro-image',
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init })
+      return Response.json({
+        candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }] } }],
+      })
+    },
+    llm: await coverLLM('classic'),
+  })
+  await updateSettings(host.store.root, { geminiBaseUrl: 'https://relay.example.com/v1beta/' })
+  await host.request('cover/generate', { id: host.article.id, style: 'classic', resolution: '2K', count: 1, format: 'jpeg' })
+  const after = await waitCover(host.request)
+  assert.equal(calls[0].url, 'https://relay.example.com/v1beta/models/gemini-3-pro-image:generateContent')
+  assert.equal(after.cover.provider, 'gemini')
+  assert.equal(after.cover.model, 'gemini-3-pro-image')
+  assert.equal(after.cover.format, 'jpeg')
+  assert.equal(after.cover.baseUrl, undefined, 'baseUrl 不应写入文章封面记录')
 })
 
 test('cover-styles.js：浏览器安全、内置元数据和共享纯函数', async () => {

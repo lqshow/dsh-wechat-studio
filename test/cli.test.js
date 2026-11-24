@@ -1264,6 +1264,61 @@ test('CLI MiniMax H3：settings 配置脱敏与 cover（环境变量、参考图
   }
 })
 
+test('CLI settings 与 cover：支持 Google Gemini（Nano Banana）配置、自定义 Base URL 与生图', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ws-cli-gemini-'))
+  const png = makePngBuffer(94, 40)
+  const secret = 'AIza-cli-secret-999'
+  const keyFlag = ['--gemini', 'key'].join('-')
+  const keyEnv = ['GEMINI', 'API', 'KEY'].join('_')
+  try {
+    const setIo = makeIo()
+    assert.equal(await runCli([
+      'settings', 'set',
+      '--cover-provider', 'gemini',
+      '--gemini-model', 'gemini-3-pro-image',
+      keyFlag, secret,
+      '--gemini-base-url', 'https://relay.example.com/v1beta/',
+      '--data-dir', dir,
+      '--json',
+    ], setIo), 0)
+    const setOut = setIo.read().out
+    assert.doesNotMatch(setOut, new RegExp(secret))
+    const setRes = JSON.parse(setOut)
+    assert.equal(setRes.ok, true)
+    assert.equal(setRes.settings.coverProvider, 'gemini')
+    assert.equal(setRes.settings.geminiModel, 'gemini-3-pro-image')
+    assert.equal(setRes.settings.geminiKeySet, true)
+    assert.equal(setRes.settings.geminiBaseUrl, 'https://relay.example.com')
+
+    const getHumanIo = makeIo()
+    assert.equal(await runCli(['settings', 'get', '--data-dir', dir], getHumanIo), 0)
+    assert.match(getHumanIo.read().out, /gemini=gemini-3-pro-image/)
+    assert.match(getHumanIo.read().out, /Gemini 已配置/)
+
+    const promptPath = join(dir, 'prompt.txt')
+    const outPath = join(dir, 'cover-gemini.png')
+    await writeFile(promptPath, '测试 Gemini Nano Banana 封面提示词', 'utf8')
+    const calls = []
+    const coverIo = makeIo({
+      env: { [keyEnv]: 'AIza-env-override' },
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init })
+        return Response.json({
+          candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }] } }],
+        })
+      },
+    })
+    assert.equal(await runCli([
+      'cover', '--prompt-file', promptPath, '--provider', 'gemini', '--out', outPath, '--data-dir', dir, '--json',
+    ], coverIo), 0)
+    assert.equal(calls[0].url, 'https://relay.example.com/v1beta/models/gemini-3-pro-image:generateContent')
+    assert.equal(calls[0].init.headers['x-goog-api-key'], 'AIza-env-override')
+    assert.ok((await readFile(outPath)).length > 0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('CLI cover 子命令：支持本地自定义封面风格、--prompt-only、usePortrait 透传与非法风格报错', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ws-cli-custom-cover-'))
   const mdPath = join(dir, 'post.md')

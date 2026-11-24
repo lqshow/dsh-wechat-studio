@@ -49,7 +49,17 @@ try {
   assert.equal(minimaxGet.ok, true)
   assert.equal(minimaxGet.settings.coverProvider, 'minimax')
   assert.equal(minimaxGet.settings.minimaxModel, 'MiniMax-H3-Image-Highspeed')
-  console.log('Installed package: exports, version, bundled skills, MiniMax settings and offline layout passed')
+  const geminiSet = run('wechat-studio settings set --cover-provider gemini --gemini-model gemini-3-pro-image --gemini-base-url https://relay.example.com/v1beta/ --data-dir data --json')
+  assert.equal(geminiSet.ok, true)
+  assert.equal(geminiSet.settings.coverProvider, 'gemini')
+  assert.equal(geminiSet.settings.geminiModel, 'gemini-3-pro-image')
+  assert.equal(geminiSet.settings.geminiBaseUrl, 'https://relay.example.com')
+  const geminiGet = run('wechat-studio settings get --data-dir data --json')
+  assert.equal(geminiGet.ok, true)
+  assert.equal(geminiGet.settings.coverProvider, 'gemini')
+  assert.equal(geminiGet.settings.geminiModel, 'gemini-3-pro-image')
+  assert.equal(geminiGet.settings.geminiBaseUrl, 'https://relay.example.com')
+  console.log('Installed package: exports, version, bundled skills, MiniMax & Gemini settings and offline layout passed')
 } finally {
   await rm(dir, { recursive: true, force: true })
 }

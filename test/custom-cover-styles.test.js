@@ -661,6 +661,33 @@ test('previewCustomCoverStyle：分阶段回调、usePortrait 透传肖像照、
     }, fetchImpl),
     err => err.status === 400 && /生图提供方/.test(err.message),
   )
+
+  // Google Gemini 试生成透传 geminiBaseUrl 与样式参考图（data: URL -> inlineData）
+  const geminiCalls = []
+  const geminiFetch = async (url, init) => {
+    geminiCalls.push({ url, init })
+    return Response.json({
+      candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }] } }],
+    })
+  }
+  const llmCtx4 = mockLlmCtx({ replies: [{ values: ['标题', '视觉'] }] })
+  const geminiRes = await previewCustomCoverStyle(llmCtx4, root, {
+    ...settings,
+    coverProvider: 'gemini',
+    geminiModel: 'gemini-nano-banana-2.1',
+    geminiKey: 'AIza-custom-style',
+    geminiBaseUrl: 'https://relay.example.com/',
+  }, {
+    draft: { template: '21:9 标题 {{主标题}}，视觉 {{视觉}}', guidance: '', usePortrait: false, useStyleReference: true },
+    styleReferenceImage: `data:image/png;base64,${png.toString('base64')}`,
+    testTitle: 'Gemini 样图',
+  }, geminiFetch)
+  assert.equal(geminiCalls.length, 1)
+  assert.equal(geminiCalls[0].url, 'https://relay.example.com/v1beta/models/gemini-nano-banana-2.1:generateContent')
+  assert.equal(JSON.parse(geminiCalls[0].init.body).contents[0].parts[0].inlineData.mimeType, 'image/png')
+  assert.equal(geminiRes.provider, 'gemini')
+  const geminiDraft = await readDraftPreview(root, geminiRes.draftToken)
+  assert.equal(geminiDraft.contentType, 'image/png')
 })
 
 test('coverPrompt：自定义风格中的 {{人物段}} 不受内置 felt 枚举约束', async () => {

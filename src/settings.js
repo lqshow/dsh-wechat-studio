@@ -1,4 +1,5 @@
 import { COVER_PROVIDERS, modelsFor } from './cover-options.js'
+import { normalizeGeminiBaseUrl } from './cover.js'
 import { DEFAULT_PERSONA, normalizePersona, PERSONA_GENDERS, PERSONA_OUTFITS } from './cover-persona.js'
 import { findBlocked, loadCoverBlocklist } from './cover-prompt.js'
 import { writeJsonAtomic } from './fs-json.js'
@@ -102,6 +103,12 @@ export async function readSettings(root) {
     bailianKey: typeof saved.bailianKey === 'string' ? saved.bailianKey : '',
     minimaxModel: modelsFor('minimax').find(model => model.id === saved.minimaxModel)?.id ?? modelsFor('minimax')[0].id,
     minimaxKey: typeof saved.minimaxKey === 'string' ? saved.minimaxKey : '',
+    geminiModel: modelsFor('gemini').find(model => model.id === saved.geminiModel)?.id ?? modelsFor('gemini')[0].id,
+    geminiKey: typeof saved.geminiKey === 'string' ? saved.geminiKey : '',
+    geminiBaseUrl: (() => {
+      if (typeof saved.geminiBaseUrl !== 'string' || !saved.geminiBaseUrl.trim()) return ''
+      try { return normalizeGeminiBaseUrl(saved.geminiBaseUrl) } catch { return '' }
+    })(),
     portraitUrl: typeof saved.portraitUrl === 'string' ? saved.portraitUrl : '',
     persona: normalizePersona(saved.persona),
     cloudinary: {
@@ -177,6 +184,16 @@ export async function updateSettings(root, body) {
     next.minimaxModel = body.minimaxModel
   }
   if (typeof body.minimaxKey === 'string') next.minimaxKey = body.minimaxKey.trim().slice(0, 400)
+  if (body.geminiModel !== undefined) {
+    if (!modelsFor('gemini').some(model => model.id === body.geminiModel)) {
+      throw Object.assign(new Error('请选择支持的 Google Gemini 封面模型。'), { status: 400 })
+    }
+    next.geminiModel = body.geminiModel
+  }
+  if (typeof body.geminiKey === 'string') next.geminiKey = body.geminiKey.trim().slice(0, 400)
+  if (typeof body.geminiBaseUrl === 'string') {
+    next.geminiBaseUrl = body.geminiBaseUrl.trim() ? normalizeGeminiBaseUrl(body.geminiBaseUrl) : ''
+  }
   if (typeof body.portraitUrl === 'string') {
     const value = body.portraitUrl.trim().slice(0, 2000)
     const url = value ? (URL.canParse(value) ? new URL(value) : null) : null
@@ -273,6 +290,9 @@ export function publicSettings(settings) {
     bailianKeySet: Boolean(settings.bailianKey),
     minimaxModel: settings.minimaxModel,
     minimaxKeySet: Boolean(settings.minimaxKey),
+    geminiModel: settings.geminiModel,
+    geminiKeySet: Boolean(settings.geminiKey),
+    geminiBaseUrl: settings.geminiBaseUrl,
     portraitUrl: settings.portraitUrl,
     persona: settings.persona ?? DEFAULT_PERSONA,
     portraitIsAuthorSample: settings.portraitUrl === AUTHOR_SAMPLE_PORTRAIT,

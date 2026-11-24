@@ -54,3 +54,23 @@ export function cropCover(image, format) {
     ? jpeg.encode({ data: out, width: cropWidth, height: cropHeight }, 90).data
     : PNG.sync.write({ data: out, width: cropWidth, height: cropHeight })
 }
+
+export function normalizeImageFormat(image, targetFormat) {
+  if (!Buffer.isBuffer(image) || image.length < 8) throw new Error('Invalid image format')
+  const isPng = image.toString('hex', 0, 8) === '89504e470d0a1a0a'
+  const isJpeg = image.toString('hex', 0, 3) === 'ffd8ff'
+  if (!isPng && !isJpeg) throw new Error('Invalid image format')
+  const sourceFormat = isPng ? 'png' : 'jpeg'
+  if (sourceFormat === targetFormat) return image
+  const dimensions = isJpeg ? jpegDimensions(image) : pngDimensions(image)
+  if (!dimensions || !dimensions.width || !dimensions.height || dimensions.width * dimensions.height > MAX_PIXELS) {
+    throw new Error('Invalid image dimensions')
+  }
+  const decoded = isJpeg ? jpeg.decode(image) : PNG.sync.read(image)
+  const data = Buffer.isBuffer(decoded.data)
+    ? decoded.data
+    : Buffer.from(decoded.data.buffer, decoded.data.byteOffset, decoded.data.byteLength)
+  return targetFormat === 'jpeg'
+    ? jpeg.encode({ data, width: decoded.width, height: decoded.height }, 90).data
+    : PNG.sync.write({ data, width: decoded.width, height: decoded.height })
+}

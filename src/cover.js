@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { BAILIAN_SIZES, MINIMAX_SIZES } from './cover-options.js'
+import { BAILIAN_SIZES, GEMINI_DEFAULT_BASE_URL, MINIMAX_SIZES } from './cover-options.js'
 import { resolveCoverStyleName } from './cover-styles.js'
 export { coverPrompt } from './cover-prompt.js'
 
@@ -15,7 +15,10 @@ function providerDetail(value, limit, apiKey) {
   if (typeof value !== 'string') return ''
   let text = value.replace(/\s+/g, ' ').trim()
   if (apiKey) text = text.split(apiKey).join('[已隐藏]')
-  return text.replace(/Bearer\s+\S+/gi, 'Bearer [已隐藏]').slice(0, limit)
+  return text
+    .replace(/Bearer\s+\S+/gi, 'Bearer [已隐藏]')
+    .replace(/x-goog-api-key[:=\s]+\S+/gi, 'x-goog-api-key [已隐藏]')
+    .slice(0, limit)
 }
 
 function decodeBase64Image(encoded, format, providerLabel, subject, requestSuffix = '') {
@@ -162,10 +165,156 @@ export async function generateMinimaxCover(prompt, { apiKey, model, resolution, 
   return decodeBase64Image(first?.b64_json, format, 'MiniMax', subject, requestSuffix)
 }
 
+const GEMINI_TIMEOUT_MS = 180_000
+const GEMINI_SAFETY_REASONS = new Set(['SAFETY', 'IMAGE_SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'IMAGE_PROHIBITED_CONTENT'])
+
+export function normalizeGeminiBaseUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return GEMINI_DEFAULT_BASE_URL
+  const trimmed = value.trim().slice(0, 500)
+  const parsed = URL.canParse(trimmed) ? new URL(trimmed) : null
+  if (!parsed || parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw Object.assign(new Error('Google Gemini API 地址需要是不带账号密码的 https:// 地址。'), { status: 400 })
+  }
+  let pathname = parsed.pathname.replace(/\/+$/, '')
+  pathname = pathname.replace(/\/v1beta$/i, '').replace(/\/+$/, '')
+  return `${parsed.origin}${pathname}`
+}
+
+function detectReferenceMimeType(image, contentType = '') {
+  if (image.length >= 8 && image.toString('hex', 0, 8) === '89504e470d0a1a0a') return 'image/png'
+  if (image.length >= 3 && image.toString('hex', 0, 3) === 'ffd8ff') return 'image/jpeg'
+  if (image.length >= 12 && image.toString('ascii', 0, 4) === 'RIFF' && image.toString('ascii', 8, 12) === 'WEBP') return 'image/webp'
+  const normalized = String(contentType).split(';')[0].trim().toLowerCase()
+  if (normalized === 'image/png' || normalized === 'image/jpeg' || normalized === 'image/webp') return normalized
+  return ''
+}
+
+async function loadGeminiReferenceImage(referenceImage, fetchImpl) {
+  const dataMatch = typeof referenceImage === 'string'
+    ? referenceImage.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)$/i)
+    : null
+  if (dataMatch) {
+    const mimeType = dataMatch[1].toLowerCase()
+    const cleaned = dataMatch[2].replace(/\s+/g, '')
+    if (!cleaned || cleaned.length > MAX_B64_CHARS) throw new Error('参考图无效或超过 24 MB。')
+    const decoded = Buffer.from(cleaned, 'base64')
+    if (!decoded.length || decoded.length > MAX_IMAGE) throw new Error('参考图无效或超过 24 MB。')
+    return { mimeType, data: cleaned }
+  }
+  const refUrl = typeof referenceImage === 'string' && URL.canParse(referenceImage) ? new URL(referenceImage) : null
+  if (!refUrl || refUrl.protocol !== 'https:' || refUrl.username || refUrl.password) {
+    throw new Error('参考图需要是有效的 https 图片地址。')
+  }
+  const refRes = await fetchImpl(referenceImage, { redirect: 'error', signal: AbortSignal.timeout(60_000) })
+  if (!refRes.ok || !refRes.body) {
+    await refRes.body?.cancel().catch(() => {})
+    throw new Error('参考图下载失败，请检查地址是否可访问。')
+  }
+  if (Number(refRes.headers?.get?.('content-length')) > MAX_IMAGE) {
+    await refRes.body.cancel().catch(() => {})
+    throw new Error('参考图超过 24 MB，请换一张较小的图片。')
+  }
+  const chunks = []
+  let size = 0
+  for await (const chunk of refRes.body) {
+    size += chunk.byteLength
+    if (size > MAX_IMAGE) throw new Error('参考图超过 24 MB，请换一张较小的图片。')
+    chunks.push(chunk)
+  }
+  const image = Buffer.concat(chunks, size)
+  const mimeType = detectReferenceMimeType(image, refRes.headers?.get?.('content-type') ?? '')
+  if (!mimeType) throw new Error('参考图仅支持 PNG、JPEG 或 WebP 格式。')
+  return { mimeType, data: image.toString('base64') }
+}
+
+export async function generateGeminiCover(
+  prompt,
+  { apiKey, model, resolution = '2K', format = 'png', referenceImage = null, baseUrl = '', aspectRatio = '21:9', subject = '封面' },
+  fetchImpl = fetch,
+) {
+  const endpoint = `${normalizeGeminiBaseUrl(baseUrl)}/v1beta/models/${encodeURIComponent(model)}:generateContent`
+  const parts = []
+  if (referenceImage) {
+    const inlineData = await loadGeminiReferenceImage(referenceImage, fetchImpl)
+    parts.push({ inlineData })
+  }
+  parts.push({ text: prompt })
+
+  const imageSize = resolution === '1K' ? '1K' : '2K'
+  const res = await fetchImpl(endpoint, {
+    method: 'POST',
+    redirect: 'error',
+    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+    headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts }],
+      generationConfig: {
+        responseModalities: ['IMAGE'],
+        imageConfig: { aspectRatio, imageSize },
+      },
+    }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    const statusText = providerDetail(body?.error?.status, 120, apiKey)
+    const message = providerDetail(body?.error?.message, 400, apiKey)
+    if (res.status === 401 || res.status === 403 || (res.status === 400 && /api key not valid|api_key_invalid/i.test(`${statusText} ${message}`))) {
+      throw new Error('Google Gemini 鉴权失败或 API Key 无权调用该模型，请检查密钥与项目权限。')
+    }
+    if (res.status === 404) {
+      throw new Error(`Google Gemini 模型 ${model} 不存在或暂不可用，请切换其他模型。`)
+    }
+    if (res.status === 429) {
+      throw new Error('Google Gemini 触发限流或配额不足；Nano Banana 生图需使用付费层级（Tier 1+）API Key，请检查结算与额度后再试。')
+    }
+    if (res.status === 400 && /location|region|country/i.test(message)) {
+      throw new Error('当前网络出口地区不支持调用 Google Gemini，请切换代理或在设置中填写自定义 API 地址。')
+    }
+    const details = [statusText && `状态：${statusText}`, message && `原因：${message}`].filter(Boolean).join('；')
+    throw new Error(`Google Gemini ${subject}生成失败（HTTP ${res.status}）${details ? `：${details}` : '，请重试。'}`)
+  }
+
+  const body = await res.json().catch(() => null)
+  if (!body || typeof body !== 'object') {
+    throw new Error(`Google Gemini 返回了无效响应，无法保存${subject}。`)
+  }
+  if (body.promptFeedback?.blockReason) {
+    throw new Error('提示词未通过 Google Gemini 内容安全审核，请调整后重试。')
+  }
+  const candidate = body.candidates?.[0]
+  if (GEMINI_SAFETY_REASONS.has(candidate?.finishReason)) {
+    throw new Error('提示词或生成结果未通过 Google Gemini 内容安全审核，请调整后重试。')
+  }
+  const imagePart = candidate?.content?.parts?.find(part => {
+    const raw = part?.inlineData?.data ?? part?.inline_data?.data
+    return typeof raw === 'string' && raw.trim().length > 0
+  })
+  const encoded = imagePart?.inlineData?.data ?? imagePart?.inline_data?.data
+  if (typeof encoded !== 'string' || !encoded.trim()) {
+    throw new Error(`Google Gemini 未返回可保存的${subject}。`)
+  }
+  const normalized = encoded.trim()
+  if (normalized.length > MAX_B64_CHARS) {
+    throw new Error(`Google Gemini ${subject}超过 24 MB，试试降低分辨率。`)
+  }
+  const raw = Buffer.from(normalized, 'base64')
+  if (!raw.length) throw new Error(`Google Gemini 未返回可保存的${subject}。`)
+  if (raw.length > MAX_IMAGE) {
+    throw new Error(`Google Gemini ${subject}超过 24 MB，试试降低分辨率。`)
+  }
+  try {
+    const { normalizeImageFormat } = await import('../dist/image-crop.mjs')
+    return normalizeImageFormat(raw, format)
+  } catch {
+    throw new Error(`Google Gemini 返回了无法解析的${subject}格式。`)
+  }
+}
+
 export async function generateCoverImage(provider, prompt, options, fetchImpl = fetch) {
   if (provider === 'ark') return generateArkCover(prompt, options, fetchImpl)
   if (provider === 'bailian') return generateBailianCover(prompt, options, fetchImpl)
   if (provider === 'minimax') return generateMinimaxCover(prompt, options, fetchImpl)
+  if (provider === 'gemini') return generateGeminiCover(prompt, options, fetchImpl)
   throw Object.assign(new Error('请选择有效的生图提供方。'), { status: 400 })
 }
 

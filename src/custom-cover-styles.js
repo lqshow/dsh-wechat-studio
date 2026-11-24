@@ -956,6 +956,7 @@ export async function previewCustomCoverStyle(ctx, root, settings, { draft, test
   if (!meta) throw httpError(400, '请选择有效的生图提供方。')
   const apiKey = settings?.[meta.keyField]
   const model = settings?.[meta.modelField]
+  const baseUrl = meta.baseUrlField ? settings?.[meta.baseUrlField] : ''
   const format = providerFormats(provider)[0] || 'png'
   if (!apiKey) throw httpError(400, meta.missingKeyError)
 
@@ -992,7 +993,7 @@ export async function previewCustomCoverStyle(ctx, root, settings, { draft, test
 
   onStage?.('generating')
   const rawImage = await generateCoverImage(provider, prompt, {
-    apiKey, model, resolution, format, referenceImage, subject: '样例封面',
+    apiKey, model, resolution, format, referenceImage, baseUrl, subject: '样例封面',
   }, fetchImpl)
 
   onStage?.('saving')

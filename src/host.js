@@ -195,7 +195,7 @@ function startCover(deps, article, apiKey, options) {
   if (jobs.has(article.id)) return
   const title = article.title
   const markdown = toMarkdown(article)
-  const { customStyle = null, runtimeReferenceImage = null, referenceKind = null, ...persisted } = options
+  const { customStyle = null, runtimeReferenceImage = null, referenceKind = null, baseUrl = '', ...persisted } = options
   const { count, style } = persisted
   const record = {
     id: randomUUID(), title, ...persisted, createdAt: new Date().toISOString(),
@@ -221,7 +221,7 @@ function startCover(deps, article, apiKey, options) {
         Object.assign(job, { stage: 'generating', index })
         let id
         try {
-          const image = await generateCoverImage(persisted.provider, prompt, { ...persisted, referenceImage: effectiveReferenceImage, apiKey }, fetchImpl)
+          const image = await generateCoverImage(persisted.provider, prompt, { ...persisted, baseUrl, referenceImage: effectiveReferenceImage, apiKey }, fetchImpl)
           job.stage = 'saving'
           id = await saveCover(store.root, image, persisted.format)
         } catch (err) {
@@ -351,6 +351,7 @@ function startInlineGeneration(deps, articleId, diagramId, style, settings) {
   const meta = providerMeta(provider)
   const model = settings[meta.modelField]
   const apiKey = settings[meta.keyField]
+  const baseUrl = meta.baseUrlField ? settings[meta.baseUrlField] : ''
   startInlineJob(deps, articleId, { kind: 'generate', stage: 'generating', diagramId, provider, style }, async () => {
     const diagram = await deps.store.update(state => {
       const article = activeInlineArticle(state, articleId)
@@ -363,7 +364,7 @@ function startInlineGeneration(deps, articleId, diagramId, style, settings) {
       article.inlineMessage = null
       return { kind: record.kind, title: record.title, brief: record.brief }
     })
-    const image = await generateInlineImage(diagram, { style, provider, model, apiKey, skillsDir: join(deps.store.root, 'skills') }, deps.fetchImpl)
+    const image = await generateInlineImage(diagram, { style, provider, model, apiKey, baseUrl, skillsDir: join(deps.store.root, 'skills') }, deps.fetchImpl)
     const assetId = await saveInlineImage(deps.store.root, image)
     let previous
     try {
@@ -1044,6 +1045,7 @@ export async function route(deps, req, res) {
       const meta = providerMeta(provider)
       const apiKey = settings[meta.keyField]
       const model = settings[meta.modelField]
+      const baseUrl = meta.baseUrlField ? settings[meta.baseUrlField] : ''
       if (!apiKey) return json(res, 400, { error: meta.missingKeyError })
       const { referenceImage: resolvedRef, referenceKind } = await resolveCoverReferenceImage(store.root, resolved, settings)
       startCover(deps, article, apiKey, {
@@ -1054,6 +1056,7 @@ export async function route(deps, req, res) {
         format,
         model,
         provider,
+        baseUrl,
         referenceImage: referenceKind === 'portrait' ? resolvedRef : null,
         runtimeReferenceImage: referenceKind === 'style' ? resolvedRef : null,
         referenceKind,

@@ -44,6 +44,7 @@ const ICONS = {
   key: 'M5.5 5a3 3 0 100 6 3 3 0 000-6zM8.5 8h5.5M11.5 8v2.2M14 8v2.2',
   search: 'M7 2.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9zM10.4 10.4L13.5 13.5',
   spark: 'M7 2l1.3 3.7L12 7l-3.7 1.3L7 12l-1.3-3.7L2 7l3.7-1.3zM12.5 10.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z',
+  user: 'M8 8.2a2.8 2.8 0 100-5.6 2.8 2.8 0 000 5.6zM3.2 13.5a4.8 4.8 0 019.6 0',
 }
 
 export function Icon({ name, size = 16 }) {
@@ -2005,6 +2006,7 @@ function SettingsDialog({ onOpenPlugin }) {
   const [coverProvider, setCoverProvider] = React.useState(null)
   const [coverModels, setCoverModels] = React.useState({})
   const [coverKeys, setCoverKeys] = React.useState({})
+  const [coverBaseUrls, setCoverBaseUrls] = React.useState({})
   const [portraitUrl, setPortraitUrl] = React.useState(null)
   const [persona, setPersona] = React.useState({})
   const [portraitBusy, setPortraitBusy] = React.useState(false)
@@ -2025,13 +2027,15 @@ function SettingsDialog({ onOpenPlugin }) {
   if (!settings) return <div className="ws-scrim"><div className="ws-dialog"><span className="ws-shimmer">正在读取设置…</span></div></div>
   const providerValue = coverProvider ?? settings.coverProvider
   const pMeta = providerMeta(providerValue)
+  const portraitConfigured = Boolean((portraitUrl ?? settings.portraitUrl ?? '').trim())
   const pages = [
-    { id: 'brand', title: '公众号品牌', icon: 'doc', description: '设置开头横幅和文末关注卡的品牌文案。' },
-    { id: 'cover', title: '封面生成', icon: 'spark', description: pMeta.description, ready: settings[pMeta.keySetField], link: pMeta.link, linkLabel: pMeta.linkLabel },
-    { id: 'storage', title: '图片图床', icon: 'upload', description: '将飞书图片自动转存到 Cloudinary，供排版预览使用。', ready: Boolean(settings.cloudinary?.cloudName && settings.cloudinary?.apiKey && settings.cloudinary?.apiSecretSet), link: 'https://console.cloudinary.com/settings/api-keys', linkLabel: 'Cloudinary API Keys' },
-    { id: 'quality', title: '朱雀质检', icon: 'scan', description: '管理检测凭证和需要排除的固定文案。', ready: settings.zhuqueKeySet, link: 'https://console.cloud.tencent.com/edgeone', linkLabel: 'EdgeOne 控制台' },
-    { id: 'preflight', title: '发布体检', icon: 'check', description: '配置本地发布防踩坑体检的自定义提醒词（仅提醒，不阻断发布）。' },
-    { id: 'mp', title: '公众号凭证', icon: 'key', description: '配置公众号的 AppID 和 AppSecret，用于一键推送排版好的内容到草稿箱。', ready: settings.mp?.appSecretSet, link: 'https://developers.weixin.qq.com/platform', linkLabel: '微信开发者平台' },
+    { id: 'brand', group: '账号与形象', title: '公众号品牌', icon: 'doc', description: '设置开头横幅和文末关注卡的品牌文案。' },
+    { id: 'persona', group: '账号与形象', title: 'IP 人物形象', icon: 'user', description: '设置封面中出现的人物参考图、性别、服装与外貌补充。', ready: portraitConfigured, readyLabel: portraitConfigured ? '已设参考图' : '随机人物' },
+    { id: 'cover', group: '视觉与媒体', title: '生图模型', icon: 'spark', description: pMeta.description, ready: settings[pMeta.keySetField], link: pMeta.link, linkLabel: pMeta.linkLabel },
+    { id: 'storage', group: '视觉与媒体', title: '图片图床', icon: 'upload', description: '将飞书图片自动转存到 Cloudinary，供排版预览使用。', ready: Boolean(settings.cloudinary?.cloudName && settings.cloudinary?.apiKey && settings.cloudinary?.apiSecretSet), link: 'https://console.cloudinary.com/settings/api-keys', linkLabel: 'Cloudinary API Keys' },
+    { id: 'quality', group: '质检与发布', title: '朱雀质检', icon: 'scan', description: '管理检测凭证和需要排除的固定文案。', ready: settings.zhuqueKeySet, link: 'https://console.cloud.tencent.com/edgeone', linkLabel: 'EdgeOne 控制台' },
+    { id: 'preflight', group: '质检与发布', title: '发布体检', icon: 'check', description: '配置本地发布防踩坑体检的自定义提醒词（仅提醒，不阻断发布）。' },
+    { id: 'mp', group: '质检与发布', title: '公众号凭证', icon: 'key', description: '配置公众号的 AppID 和 AppSecret，用于一键推送排版好的内容到草稿箱。', ready: settings.mp?.appSecretSet, link: 'https://developers.weixin.qq.com/platform', linkLabel: '微信开发者平台' },
   ]
   const selected = pages.find(item => item.id === page)
   const endpointValue = endpoint ?? (settings.zhuqueEndpointDefault ? '' : settings.zhuqueEndpoint)
@@ -2047,6 +2051,9 @@ function SettingsDialog({ onOpenPlugin }) {
       out[meta.modelField] = coverModels[item.id] ?? settings[meta.modelField]
       const trimmedKey = (coverKeys[item.id] ?? '').trim()
       if (trimmedKey) out[meta.keyField] = trimmedKey
+      if (meta.baseUrlField && coverBaseUrls[item.id] !== undefined) {
+        out[meta.baseUrlField] = coverBaseUrls[item.id].trim()
+      }
     }
     out.persona = { ...settings.persona, ...persona }
     // 只有改过才提交，避免把读到的旧值（可能是作者示例照片）再写一遍
@@ -2088,9 +2095,13 @@ function SettingsDialog({ onOpenPlugin }) {
 
         <div className="ws-settings-body">
           <nav className="ws-settings-nav" aria-label="设置分类">
-            {pages.map(item => (
-              <button key={item.id} type="button" aria-current={page === item.id ? 'page' : undefined}
-                onClick={() => setPage(item.id)}><Icon name={item.icon} /><span>{item.title}</span></button>
+            {pages.map((item, index) => (
+              <React.Fragment key={item.id}>
+                {index === 0 || pages[index - 1].group !== item.group
+                  ? <span className="ws-settings-nav-group">{item.group}</span> : null}
+                <button type="button" aria-current={page === item.id ? 'page' : undefined}
+                  onClick={() => setPage(item.id)}><Icon name={item.icon} /><span>{item.title}</span></button>
+              </React.Fragment>
             ))}
             {settings.version ? <div className="ws-settings-version">
               <span>v{settings.version}</span>
@@ -2102,7 +2113,7 @@ function SettingsDialog({ onOpenPlugin }) {
           <div className="ws-settings-content">
             <div className="ws-settings-section-head">
               <h3>{selected.title}</h3>
-              {selected.ready !== undefined ? <span className={`ws-settings-status ${selected.ready ? 'ws-ok' : 'ws-muted'}`}>{selected.ready ? '已配置' : '未配置'}</span> : null}
+              {selected.ready !== undefined ? <span className={`ws-settings-status ${selected.ready ? 'ws-ok' : 'ws-muted'}`}>{selected.readyLabel ?? (selected.ready ? '已配置' : '未配置')}</span> : null}
             </div>
             <p className="ws-settings-description ws-muted">{selected.description}</p>
             {selected.link ? <a className="ws-link ws-settings-provider" href={selected.link} target="_blank" rel="noreferrer">{selected.linkLabel} ↗</a> : null}
@@ -2119,11 +2130,25 @@ function SettingsDialog({ onOpenPlugin }) {
               <p className="ws-muted ws-small">用于开头横幅和文末关注卡。清空并保存可恢复默认文案。</p>
             </fieldset>
             <fieldset className="ws-group ws-settings-fields" hidden={page !== 'cover'}>
-              <label className="ws-field"><span>封面提供方</span>
-                <select value={providerValue} onChange={e => setCoverProvider(e.target.value)}>
-                  {COVER_PROVIDERS.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-              </label>
+              <div className="ws-field"><span>生图提供方</span>
+                <div className="ws-provider-cards" role="radiogroup" aria-label="生图提供方">
+                  {COVER_PROVIDERS.map(item => {
+                    const meta = providerMeta(item.id)
+                    const ready = Boolean(settings[meta.keySetField])
+                    return <label key={item.id} className="ws-provider-card">
+                      <input type="radio" name="cover-provider" value={item.id}
+                        checked={providerValue === item.id} onChange={() => setCoverProvider(item.id)} />
+                      <span className="ws-provider-card-body">
+                        <span className="ws-provider-card-head">
+                          <strong>{item.name}</strong>
+                          {ready ? <span className="ws-provider-dot" title="已配置 API Key" aria-label="已配置" /> : null}
+                        </span>
+                        {meta.subtitle ? <small>{meta.subtitle}</small> : null}
+                      </span>
+                    </label>
+                  })}
+                </div>
+              </div>
               <label className="ws-field"><span>图片模型</span>
                 <select value={coverModels[providerValue] ?? settings[pMeta.modelField]}
                   onChange={e => setCoverModels(prev => ({ ...prev, [providerValue]: e.target.value }))}>
@@ -2135,7 +2160,15 @@ function SettingsDialog({ onOpenPlugin }) {
                   onChange={e => setCoverKeys(prev => ({ ...prev, [providerValue]: e.target.value }))}
                   placeholder={settings[pMeta.keySetField] ? '已保存，留空表示不改' : pMeta.keyPlaceholder} />
               </label>
+              {pMeta.baseUrlField ? <label className="ws-field"><span>API 地址（选填）</span>
+                <input type="url" spellCheck={false}
+                  value={coverBaseUrls[providerValue] ?? settings[pMeta.baseUrlField] ?? ''}
+                  onChange={e => setCoverBaseUrls(prev => ({ ...prev, [providerValue]: e.target.value }))}
+                  placeholder={`${pMeta.defaultBaseUrl}，留空使用官方地址`} />
+              </label> : null}
               {pMeta.hint ? <p className="ws-muted ws-small">{pMeta.hint}</p> : null}
+            </fieldset>
+            <fieldset className="ws-group ws-settings-fields" hidden={page !== 'persona'}>
               {(() => {
                 const portraitValue = portraitUrl ?? settings.portraitUrl ?? ''
                 const previewUrl = portraitPreview ?? settings.portraitUrl ?? ''

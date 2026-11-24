@@ -28,7 +28,7 @@ export async function inlineDiagramPrompt(diagram, style, { skillsDir } = {}) {
   ].join('\n\n')
 }
 
-export async function generateInlineImage(diagram, { style, provider, model, apiKey, skillsDir }, fetchImpl = fetch) {
+export async function generateInlineImage(diagram, { style, provider, model, apiKey, baseUrl = '', skillsDir }, fetchImpl = fetch) {
   if (!Object.hasOwn(INLINE_IMAGE_SIZES, provider)) {
     throw Object.assign(new Error('请选择有效的生图提供方。'), { status: 400 })
   }
@@ -36,6 +36,7 @@ export async function generateInlineImage(diagram, { style, provider, model, api
   const options = {
     apiKey, model, referenceImage: null, format: 'png', resolution: INLINE_IMAGE_SIZES[provider],
     size: INLINE_IMAGE_SIZES[provider], subject: '插图',
+    ...(provider === 'gemini' ? { baseUrl, aspectRatio: '16:9' } : {}),
   }
   return generateCoverImage(provider, prompt, options, fetchImpl)
 }

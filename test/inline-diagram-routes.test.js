@@ -584,3 +584,35 @@ test('正文插图路由支持 MiniMax：缺 Key 拦截、正常生成与超时�
   assert.match(afterTimeout.inlineDiagrams[0].error, /600 秒.*计费/)
   assert.doesNotMatch(afterTimeout.inlineDiagrams[0].error, /请重试/)
 })
+
+test('正文插图路由支持 Google Gemini：缺 Key 拦截、自定义 Base URL 透传与 JPEG 自动转 PNG 落盘', async () => {
+  const { default: jpegJs } = await import('jpeg-js')
+  const jpeg = jpegJs.encode({ data: Buffer.from([255, 0, 0, 255]), width: 1, height: 1 }, 90).data
+  const calls = []
+  const { store, article, request, wait } = await setup({
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init })
+      return Response.json({
+        candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: jpeg.toString('base64') } }] } }],
+      })
+    },
+  })
+  await updateSettings(store.root, { coverProvider: 'gemini', geminiKey: '' })
+  const missing = await request('inline-diagrams/generate', { id: article.id, diagramId: 'diagram-1', style: 'notebook' })
+  assert.match(missing.error, /Google Gemini API Key/)
+
+  await updateSettings(store.root, {
+    coverProvider: 'gemini',
+    geminiKey: 'AIza-inline-route',
+    geminiModel: 'gemini-3.1-flash-image',
+    geminiBaseUrl: 'https://relay.example.com/v1beta/',
+  })
+  const started = await request('inline-diagrams/generate', { id: article.id, diagramId: 'diagram-1', style: 'notebook' })
+  assert.ok(!started.error, started.error)
+  const current = await wait()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://relay.example.com/v1beta/models/gemini-3.1-flash-image:generateContent')
+  assert.equal(current.inlineDiagrams[0].status, 'generated')
+  assert.equal(current.inlineDiagrams[0].provider, 'gemini')
+  assert.equal(current.inlineDiagrams[0].model, 'gemini-3.1-flash-image')
+})

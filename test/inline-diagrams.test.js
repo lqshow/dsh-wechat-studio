@@ -208,6 +208,27 @@ test('插图提示词使用风格白名单和图种结构，超时与无效响�
   await assert.rejects(generateInlineImage(diagram, options, async () => { throw new DOMException('超时', 'TimeoutError') }), { name: 'TimeoutError' })
 })
 
+test('正文插图支持 Google Gemini：16:9 比例、自定义 Base URL 透传与 JPEG 自动转 PNG', async () => {
+  const { default: jpegJs } = await import('jpeg-js')
+  const jpeg = jpegJs.encode({ data: Buffer.from([255, 0, 0, 255]), width: 1, height: 1 }, 90).data
+  const calls = []
+  const image = await generateInlineImage(diagram, {
+    style: 'notebook',
+    provider: 'gemini',
+    model: 'gemini-nano-banana-2.1',
+    apiKey: 'AIza-inline-key',
+    baseUrl: 'https://relay.example.com/',
+  }, async (url, init) => {
+    calls.push({ url, init })
+    return Response.json({
+      candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: jpeg.toString('base64') } }] } }],
+    })
+  })
+  assert.equal(calls[0].url, 'https://relay.example.com/v1beta/models/gemini-nano-banana-2.1:generateContent')
+  assert.deepEqual(JSON.parse(calls[0].init.body).generationConfig.imageConfig, { aspectRatio: '16:9', imageSize: '2K' })
+  assert.equal(image.toString('hex', 0, 8), '89504e470d0a1a0a', '插图必须输出有效 PNG')
+})
+
 test('插图资产原样保存为 UUID PNG，拒绝跨稿读取', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ws-inline-asset-'))
   const assetId = await saveInlineImage(root, PNG)

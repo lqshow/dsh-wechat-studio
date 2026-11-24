@@ -555,9 +555,11 @@ body[data-ds-dark-theme] .ws-root { color-scheme: dark; --ok: #6fcb9c; --bad: #f
 .ws-settings-dialog > .ws-dialog-head, .ws-settings-dialog > .ws-dialog-foot { flex: none; padding: 14px 20px; }
 .ws-settings-dialog > .ws-dialog-head { border-bottom: 1px solid var(--line); }
 .ws-settings-dialog > .ws-dialog-foot { border-top: 1px solid var(--line); }
-.ws-settings-body { display: grid; grid-template-columns: 174px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-height: 0; height: 400px; }
-.ws-settings-nav { background: var(--panel); border-right: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 4px; overflow: auto; }
-.ws-settings-nav button { display: flex; align-items: center; gap: 8px; text-align: left; white-space: nowrap; padding: 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; }
+.ws-settings-body { display: grid; grid-template-columns: 174px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-height: 0; height: min(520px, 70vh); }
+.ws-settings-nav { background: var(--panel); border-right: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 3px; overflow: auto; }
+.ws-settings-nav-group { padding: 10px 10px 4px; font-size: 11px; line-height: 16px; font-weight: 600; color: var(--ink2); letter-spacing: .02em; }
+.ws-settings-nav-group:first-child { padding-top: 2px; }
+.ws-settings-nav button { display: flex; align-items: center; gap: 8px; text-align: left; white-space: nowrap; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; }
 .ws-settings-nav button:hover { background: var(--hover); }
 .ws-settings-nav button[aria-current] { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
 .ws-settings-version { margin-top: auto; padding: 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--ink2); white-space: nowrap; }
@@ -573,6 +575,33 @@ body[data-ds-dark-theme] .ws-root { color-scheme: dark; --ok: #6fcb9c; --bad: #f
 .ws-settings-fields[hidden] { display: none; }
 .ws-settings-fields legend { padding: 0; margin-bottom: 6px; }
 .ws-settings-fields select { width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--ink); }
+.ws-provider-cards {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px;
+  padding: 5px; border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 93%, #6d6cbc);
+}
+.ws-provider-card { position: relative; min-width: 0; cursor: pointer; }
+.ws-provider-card input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: inherit; }
+.ws-provider-card-body {
+  display: flex; flex-direction: column; gap: 2px; padding: 9px 12px;
+  border: 1px solid transparent; border-radius: 8px;
+  color: var(--ink); transition: background-color .14s ease, border-color .14s ease, box-shadow .14s ease;
+}
+.ws-provider-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ws-provider-card-head strong { font-size: 13.5px; line-height: 19px; font-weight: 550; }
+.ws-provider-card-body small { font-size: 12px; line-height: 16px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-provider-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+.ws-provider-card:hover .ws-provider-card-body { background: color-mix(in srgb, var(--card) 55%, transparent); }
+.ws-provider-card input:checked + .ws-provider-card-body {
+  background: var(--card);
+  border-color: color-mix(in srgb, var(--line) 75%, #8184be);
+  box-shadow: 0 1px 3px rgb(25 25 50 / .08);
+}
+.ws-provider-card input:checked + .ws-provider-card-body strong { font-weight: 650; }
+.ws-provider-card input:focus-visible + .ws-provider-card-body { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 480px) {
+  .ws-provider-cards { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 600px) {
   .ws-settings-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .ws-settings-nav { flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); }
