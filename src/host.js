@@ -1706,16 +1706,48 @@ export async function route(deps, req, res) {
 }
 
 /**
+ * 把 Node IncomingMessage 整理成 DSH 0.2.3+ `connection.admit` 期望的请求事实：
+ * headers、socket 和绝对 url（原生的 req.url 只有路径，和宿主 webserver/authorize 对齐）。
+ */
+export function admissionFacts(req) {
+  const headers = req?.headers ?? {}
+  const host = headers.host ?? 'localhost'
+  const scheme = req?.socket?.encrypted === true ? 'https' : 'http'
+  let url
+  try {
+    url = new URL(req?.url ?? '/', `${scheme}://${host}`).href
+  } catch {
+    url = `${scheme}://localhost/`
+  }
+  return { method: req?.method ?? 'GET', headers, socket: req?.socket, url }
+}
+
+/**
  * Web 服务不会替插件路由鉴权，每个请求都要自己过一遍 Host/Origin 和登录凭证检查。
- * 拿不到鉴权服务时一律拒绝。
+ * 兼容 DSH < 0.2.3 的 `connection.requestRejection` 和 DSH 0.2.3+ 的 `connection.admit`。
+ * 拿不到鉴权服务或鉴权调用抛错时一律拒绝。
  */
 export function requestRejection(ctx, req) {
   const connection = ctx.get('connection')
-  if (typeof connection?.requestRejection !== 'function') return 403
-  return connection.requestRejection({ headers: req.headers })
+  if (typeof connection?.requestRejection === 'function') {
+    try {
+      return connection.requestRejection({ headers: req?.headers ?? {} })
+    } catch {
+      return 403
+    }
+  }
+  if (typeof connection?.admit === 'function') {
+    try {
+      const answer = connection.admit(admissionFacts(req))
+      return typeof answer?.rejection === 'number' ? answer.rejection : answer ? undefined : 403
+    } catch {
+      return 403
+    }
+  }
+  return 403
 }
 
-export function createHandler(ctx, { store = new Store(), fetchImpl } = {}) {
+export function createHandler(ctx, { store = new Store(), fetchImpl, getAuthCtx } = {}) {
   const pipeline = new Pipeline({ ctx, store, skillsDir: join(store.root, 'skills'), fetchImpl })
   const insightsStore = new JsonStore(store.root, { file: 'insights.json', empty: INSIGHTS_EMPTY })
   const versionChecker = createVersionChecker({ currentVersion: VERSION, fetchImpl })
@@ -1736,7 +1768,7 @@ export function createHandler(ctx, { store = new Store(), fetchImpl } = {}) {
   return async (req, res) => {
     await inlineCleanup
     try {
-      const rejection = requestRejection(ctx, req)
+      const rejection = requestRejection(getAuthCtx ? getAuthCtx() : ctx, req)
       if (rejection) return json(res, rejection, { error: '未授权' })
       await route(deps, req, res)
     } catch (err) {
@@ -1751,6 +1783,24 @@ export const name = 'dsh-wechat-studio'
 export default {
   inject: ['webServer', 'connection'],
   apply(ctx) {
-    ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/wechat-studio', handler: createHandler(ctx) }), 'dsh-wechat-studio: /wechat-studio routes')
+    // DSH 0.2.3+ 的 `connection.admit` 会经由调用方 ctx 读取 `connection.authentication`。
+    // 用可选子作用域声明该依赖：旧宿主（< 0.2.3）没有此服务时不影响插件挂载，新宿主提供后自动切过去。
+    let authCtx
+    if (typeof ctx.inject === 'function') {
+      ctx.effect(() => {
+        const scope = ctx.inject(['connection', 'connection.authentication'], loginCtx => {
+          authCtx = loginCtx
+          return () => {
+            if (authCtx === loginCtx) authCtx = undefined
+          }
+        })
+        return () => {
+          authCtx = undefined
+          void Promise.resolve(scope?.dispose?.()).catch(() => {})
+        }
+      }, 'dsh-wechat-studio: connection.authentication scope')
+    }
+    const handler = createHandler(ctx, { getAuthCtx: () => authCtx ?? ctx })
+    ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/wechat-studio', handler }), 'dsh-wechat-studio: /wechat-studio routes')
   },
 }
