@@ -4,6 +4,7 @@ import { esc, escQ, fixed, floatStr, round, pad, chars, len, slice, dumps, strip
 import { re } from './pyre.js'
 import * as B from './banner.js'
 import { DEFAULT_GALLERY_LABEL, galleryColors, isGalleryOpening, parseGalleryBlock } from '../../src/gallery.js'
+import { parseVideoCardLines, renderVideoCardHtml } from '../../src/video-card.js'
 
 const theme = (name, main, soft, tint, line, mark) => ({ name, main, soft, tint, line, mark })
 // 15 套配色：main 主色 / soft 浅底 / tint 色块 / line 线条 / mark 荧光笔
@@ -1287,6 +1288,7 @@ function render(md, T, meta, stat = null) {
       while (body.length && !strip(body[body.length - 1])) body.pop()
       while (body.length && !strip(body[0])) body.shift()
       if (Object.hasOwn(SVG_KINDS, lang)) { bump(stat, '动画卡'); emit(svgCardHtml(lang, arg, body, T)) }
+      else if (lang === 'video') { bump(stat, '视频占位'); emit(renderVideoCardHtml(parseVideoCardLines(body, arg), T), true) }
       else if (lang === 'prompt') { bump(stat, '滑动卡'); emit(promptBox(body, arg, T)) }
       else if (lang === 'promptbox') {
         const inner = body.map(b => `<p style="margin:0;white-space:pre-wrap;word-break:break-all;font-size:13px;line-height:1.85;color:${PROMPT_INK};font-family:${MONO};">${esc(b) || ' '}</p>`).join('')

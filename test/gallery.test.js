@@ -35,7 +35,7 @@ test('parseMarkdownGallery 支持单行 mdnice 语法和多行尖括号语法，
 })
 
 test('editor-format：插入菜单包含横滑图集，cardMarkdown 生成可往返解析的语法', () => {
-  const mediaGroup = insertFormats.find(g => g.label === '图片与分隔')
+  const mediaGroup = insertFormats.find(g => g.label === '媒体与分隔')
   assert.ok(mediaGroup.items.some(([id, label]) => id === 'gallery' && label === '横滑图集'))
 
   assert.throws(() => cardMarkdown('gallery', '', [{ src: IMG1, caption: '' }]), /至少需要 2 张图片/)

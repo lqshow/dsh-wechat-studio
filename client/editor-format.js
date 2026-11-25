@@ -1,3 +1,5 @@
+import { formatVideoCardMarkdown } from '../src/video-card.js'
+
 export const emphasisFormats = [
   { id: 'bold', label: '荧光笔加粗', symbol: 'B', marker: '**' },
   { id: 'highlight', label: '色块强调', symbol: '色', marker: '==' },
@@ -13,7 +15,7 @@ export const insertFormats = [
     ['bash', '终端 · bash'], ['text', '终端 · text'],
     ['prompt', '长提示词 · 黑标签'], ['promptbox', '长提示词 · 虚线框'],
   ] },
-  { label: '图片与分隔', items: [['image', '图片与图注'], ['long', '长图卡'], ['gallery', '横滑图集'], ['rule', '分隔线']] },
+  { label: '媒体与分隔', items: [['image', '图片与图注'], ['long', '长图卡'], ['gallery', '横滑图集'], ['video', '视频装裱卡'], ['rule', '分隔线']] },
 ]
 
 function normalizeImageUrl(raw) {
@@ -24,6 +26,10 @@ function normalizeImageUrl(raw) {
 }
 
 export function cardMarkdown(id, title, value) {
+  if (id === 'video') {
+    const spec = value && typeof value === 'object' ? value : { title: title || value }
+    return formatVideoCardMarkdown(spec)
+  }
   if (id === 'gallery') {
     const rawItems = Array.isArray(value)
       ? value
@@ -71,6 +77,16 @@ export function formatSelection(text, start, end, id, card) {
     body = '![' + caption + '](<' + url + '>' + (id === 'long' ? ' "long"' : '') + ')'
     from = isUrl ? 2 : caption.length + 5
     to = from + (isUrl ? caption.length : url.length)
+  } else if (id === 'video') {
+    body = formatVideoCardMarkdown({
+      style: 'cinema',
+      index: 'CASE 01',
+      title: selection || '《演示片段》',
+      model: '1080P · 24FPS',
+      duration: '00:30',
+      spec: 'REC.709',
+    })
+    from = to = body.length
   } else if (id === 'gallery') {
     const first = '![图1](<图片地址1>)'
     body = '<\n' + first + ',\n![图2](<图片地址2>)\n>'

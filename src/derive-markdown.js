@@ -2,6 +2,7 @@ import { blockKind, parseMarkdownGallery, parseMarkdownImage } from './article.j
 import { MARKDOWN_TARGETS } from './derive-shared.js'
 import { feishuImageUrls } from './markdown-images.js'
 import { parseSvgCardBlock } from './svg-cards.js'
+import { parseVideoCardBlock } from './video-card.js'
 
 const CTA_BLOCK_RE = /^(点个?赞|在看|转发|设为[「"“]?星标|关注我|点击.{0,6}阅读原文)/
 const VIDEO_PLACEHOLDER_RE = /^\[([^\]]+\.(?:mp4|mov|m4v|webm|avi))\]$/i
@@ -131,6 +132,15 @@ export function portableBlocks(article, { target = 'blog', fixedLines = [] } = {
         } catch {
           failedSvgCount += 1
         }
+        return
+      }
+      const videoCard = parseVideoCardBlock(trimmed)
+      if (videoCard) {
+        const label = [videoCard.index, videoCard.title].filter(Boolean).join(' ') || '视频片段'
+        warnings.push(`第 ${no} 段的视频装裱卡需在目标平台手动上传视频：${label}`)
+        const lines = [`> 视频：${label}${videoCard.duration ? `（${videoCard.duration}）` : ''}`]
+        if (videoCard.note) lines.push(`> ${videoCard.note}`)
+        blocks.push({ id: block.id, text: lines.join('\n') })
         return
       }
       blocks.push({ id: block.id, text: raw })

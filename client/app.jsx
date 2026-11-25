@@ -24,6 +24,7 @@ import { MarkdownImportFields } from './markdown-import.jsx'
 import { AnimatedNumber, scrollBehavior, SlidingTabs, useDialogClose, usePresence, usePresenceValue, useSlidingIndicator } from './motion.jsx'
 import { ScheduleView } from './schedule.jsx'
 import { isSvgCardText, SvgCardBlock, SvgCardsPane } from './svg-cards.jsx'
+import { isVideoCardText, VideoCardBlock, VideoCardInsert } from './video-card.jsx'
 import { WritingStyleCard, WritingStyleWizard } from './writing-style.jsx'
 
 const ICONS = {
@@ -135,9 +136,10 @@ function PaperGallery({ gallery, layoutStyle, palette }) {
   </div>
 }
 
-function BlockBody({ block, sectionNumber, articleId, layoutPreferences, palette }) {
+function BlockBody({ block, sectionNumber, articleId, layoutPreferences, palette, onEdit }) {
   const { kind, text } = block
   if (kind === 'code' && isSvgCardText(text)) return <SvgCardBlock articleId={articleId} block={block} layoutPreferences={layoutPreferences} />
+  if (kind === 'code' && isVideoCardText(text)) return <VideoCardBlock text={text} layoutStyle={layoutPreferences?.style} palette={palette} onEdit={onEdit} />
   if (kind === 'heading') {
     const level = /^#+/.exec(text)[0].length
     const heading = text.replace(/^#+\s+/, '')
@@ -571,7 +573,7 @@ function GalleryInsert({ card, onInsert, onClose, onUpload }) {
   </dialog>
 }
 
-function Editor({ articleId, block, number, sectionNumber, busy, nextId, onDone }) {
+function Editor({ articleId, block, number, sectionNumber, layoutPreferences, palette, busy, nextId, onDone }) {
   const [draft, setDraft] = React.useState(() => draftsFor(articleId).get(block.id) ?? { text: block.text, original: block.text })
   const storageFailed = useStudio(s => s.draftStorageFailed)
   const [preview, setPreview] = React.useState(false)
@@ -627,8 +629,29 @@ function Editor({ articleId, block, number, sectionNumber, busy, nextId, onDone 
     const el = ref.current
     if (!el) return
     const { selectionStart: start, selectionEnd: end } = el
-    if (['image', 'long', 'gallery', 'prompt', 'promptbox'].includes(id)) {
+    if (['image', 'long', 'gallery', 'video', 'prompt', 'promptbox'].includes(id)) {
       if (menu.current) menu.current.open = false
+      if (id === 'video') {
+        const nextCard = start === end && isVideoCardText(draft.text)
+          ? { id, start: 0, end: draft.text.length, selection: draft.text }
+          : { id, start, end, selection: draft.text.slice(start, end) }
+        setState({
+          videoCardModal: {
+            card: nextCard,
+            layoutStyle: layoutPreferences?.style,
+            palette,
+            onUpload: file => uploadImage(file, articleId),
+            onClose: () => { setState({ videoCardModal: null }); focusRange(nextCard.start, nextCard.end) },
+            onInsert: markdown => {
+              const next = formatSelection(draft.text, nextCard.start, nextCard.end, nextCard.id, markdown)
+              if (next.text.length > 20000) throw new Error('插入后会超过这一段的 20000 字符上限。')
+              setState({ videoCardModal: null })
+              applyFormat(next)
+            },
+          },
+        })
+        return
+      }
       if (id === 'gallery' && start === end && parseGalleryBlock(draft.text)) {
         setCard({ id, start: 0, end: draft.text.length, selection: draft.text })
       } else {
@@ -706,7 +729,7 @@ function Editor({ articleId, block, number, sectionNumber, busy, nextId, onDone 
         </div>
       </div>
       {preview ? <div className="ws-editor-preview">{splitMarkdown(draft.text, { bodyOnly: true }).blocks.map((text, index) =>
-        <BlockBody key={index} sectionNumber={sectionNumber} block={{ kind: blockKind(text), text }} />)}</div> : (
+        <BlockBody key={index} sectionNumber={sectionNumber} layoutPreferences={layoutPreferences} palette={palette} block={{ kind: blockKind(text), text }} />)}</div> : (
         <textarea ref={ref} className="ws-edit" value={draft.text} aria-label={`编辑第 ${number} 段`} readOnly={saving}
           maxLength={20000} onChange={event => edit(event.target.value)} onPaste={pasteImage} />
       )}
@@ -875,7 +898,7 @@ function Paper({ article, reviewTarget, reviewPulse }) {
               {editing === block.id ? <span className="ws-no" aria-hidden="true">{index + 1}</span> :
                 <button type="button" className="ws-no ws-edge-edit" aria-label={`编辑第 ${index + 1} 段`} disabled={Boolean(job || pending)}
                   onClick={() => openParagraph(article.id, block.id)}><span>{index + 1}</span><span aria-hidden="true">✎</span></button>}
-              {editing === block.id ? <Editor key={block.id} articleId={article.id} block={block} number={index + 1} sectionNumber={headingNumber} busy={Boolean(job || pending)}
+              {editing === block.id ? <Editor key={block.id} articleId={article.id} block={block} number={index + 1} sectionNumber={headingNumber} layoutPreferences={article.effectiveLayoutPreferences} palette={article.xhsPalette} busy={Boolean(job || pending)}
                 nextId={article.blocks[index + 1]?.id} onDone={nextId => {
                 const state = getState()
                 if (state.editing !== block.id) return
@@ -888,6 +911,26 @@ function Paper({ article, reviewTarget, reviewPulse }) {
               }} />
                 : isSvgCardText(block.text) ? <div className="ws-block ws-svg-block">
                   <BlockBody block={block} sectionNumber={headingNumber} articleId={article.id} layoutPreferences={article.effectiveLayoutPreferences} />
+                </div> : isVideoCardText(block.text) ? <div className="ws-block ws-svg-block">
+                  <BlockBody block={block} sectionNumber={headingNumber} layoutPreferences={article.effectiveLayoutPreferences} palette={article.xhsPalette}
+                    onEdit={Boolean(job || pending) ? null : () => setState({
+                      videoCardModal: {
+                        card: { id: 'video', start: 0, end: block.text.length, selection: block.text },
+                        layoutStyle: article.effectiveLayoutPreferences?.style,
+                        palette: article.xhsPalette,
+                        onUpload: file => uploadImage(file, article.id),
+                        onClose: () => setState({ videoCardModal: null }),
+                        onInsert: async markdown => {
+                          if (markdown !== block.text) {
+                            const ok = await act('block/update', { id: article.id, blockId: block.id, text: markdown, expectedText: block.text })
+                            if (!ok) throw new Error('保存失败，请稍后重试。')
+                            trackParagraphDraft(article.id, block.id, null)
+                          }
+                          setState({ videoCardModal: null })
+                        },
+                      },
+                    })} />
+                  {draftsFor(article.id).has(block.id) ? <span className="ws-unsaved">有未保存的修改</span> : null}
                 </div> : <button type="button" className="ws-block" disabled={Boolean(job || pending)} title="点一下直接改这一段" onClick={() => openParagraph(article.id, block.id)}>
                   <BlockBody block={block} sectionNumber={headingNumber} layoutPreferences={article.effectiveLayoutPreferences} palette={article.xhsPalette} />
                   {draftsFor(article.id).has(block.id) ? <span className="ws-unsaved">有未保存的修改</span> : null}
@@ -2903,6 +2946,7 @@ export function Studio({ onOpenPlugin }) {
   const paperHome = useStudio(s => s.paperHome)
   const dialog = useStudio(s => s.dialog)
   const customCoverWizard = useStudio(s => s.customCoverWizard)
+  const videoCardModal = useStudio(s => s.videoCardModal)
   const revisionBlockId = useStudio(s => s.revisionBlockId)
   const reimportArticleId = useStudio(s => s.reimportArticleId)
   const paperSession = useStudio(s => s.paperSession)
@@ -2939,6 +2983,7 @@ export function Studio({ onOpenPlugin }) {
       {dialog === 'new' ? <NewDialog /> : null}
       {dialog === 'style-wizard' ? <WritingStyleWizard /> : null}
       {customCoverWizard?.open ? <CustomCoverStyleWizard /> : null}
+      {videoCardModal ? <VideoCardInsert {...videoCardModal} Icon={Icon} /> : null}
       {dialog === 'settings' ? <SettingsDialog onOpenPlugin={onOpenPlugin} /> : null}
       {dialog === 'model' ? <ModelDialog /> : null}
       {toastMounted && toastItem ? (

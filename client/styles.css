@@ -37,7 +37,7 @@
   --shadow-pill: 0 1px 2px rgb(0 0 0 / .08), 0 0 0 .5px rgb(0 0 0 / .04);
   --shadow-pop: 0 12px 32px rgb(0 0 0 / .14), 0 1px 3px rgb(0 0 0 / .06);
   --shadow-dialog: 0 24px 60px rgb(0 0 0 / .22), 0 2px 8px rgb(0 0 0 / .08);
-  position: relative; display: flex; width: 100%; height: 100%; min-height: 0; overflow: hidden;
+  position: relative; display: flex; width: 100%; height: 100%; min-height: 0; overflow: clip;
   container-type: inline-size;
   background: var(--bg); color: var(--ink);
   font-family: var(--dsw-font-family, -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif);
@@ -165,6 +165,7 @@ body[data-ds-dark-theme] .ws-root {
 /* 稿纸：每一段一行，左边是纸，右边是纸边批注 */
 .ws-sheet-wrap { width: 100%; max-width: 760px; margin: 0 auto; padding: 24px 20px 48px; }
 .ws-row { display: grid; grid-template-columns: minmax(0, 460px) minmax(0, 1fr); column-gap: 14px; }
+.ws-row:has(.ws-editor) { position: relative; z-index: 20; }
 .ws-sheet { position: relative; padding: 7px 26px 7px 34px; background: var(--paper); color: var(--paper-ink); border-left: 1px solid var(--paper-line); border-right: 1px solid var(--paper-line); font-size: 15px; line-height: 27px; }
 .ws-sheet.is-first { padding-top: 26px; border-top: 1px solid var(--paper-line); border-radius: 6px 6px 0 0; }
 .ws-sheet.is-last { padding-bottom: 34px; border-bottom: 1px solid var(--paper-line); border-radius: 0 0 6px 6px; }
@@ -360,7 +361,7 @@ body[data-ds-dark-theme] .ws-root {
 
 /* 弹窗和提示 */
 .ws-scrim { position: absolute; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: calc(20px + min(var(--dsh-frame-leading-clearance, 0px), 1px) * 36) 20px 20px; background: rgb(0 0 0 / .32); -webkit-app-region: no-drag; }
-.ws-dialog { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: 620px; max-height: 100%; overflow: auto; padding: 18px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 24px 60px rgb(0 0 0 / .22); }
+.ws-dialog { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: 620px; max-height: 100%; overflow: auto; padding: 18px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 24px 60px rgb(0 0 0 / .22); -webkit-app-region: no-drag; }
 .ws-dialog-head, .ws-dialog-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ws-dialog-foot { justify-content: flex-end; }
 .ws-card-insert { width: min(480px, calc(100% - 24px)); max-height: 85dvh; margin: auto; color: var(--ink); color-scheme: inherit; }
@@ -2587,4 +2588,43 @@ dialog.ws-dialog.is-closing::backdrop {
   .ws-root button:active {
     transform: none !important;
   }
+}
+
+
+/* ---------- 视频装裱卡（稿纸展示 + 可视化弹窗） ---------- */
+.ws-paper-video { display: grid; gap: 6px; cursor: default; }
+.ws-paper-video-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ws-paper-video-actions { display: inline-flex; align-items: center; gap: 10px; }
+.ws-paper-video-actions .ws-link { font-size: 12px; padding: 0; }
+.ws-paper-video-stage { border-radius: 12px; }
+.ws-paper-video-stage > section { margin: 0 !important; }
+.ws-paper-video-stage.is-dark { padding: 10px; background: #0f1218; border-radius: 14px; }
+
+.ws-video-dialog { width: 100%; max-width: 900px; max-height: 100%; padding: 0; gap: 0; overflow: hidden; color: var(--ink); color-scheme: inherit; }
+.ws-video-dialog-form { display: flex; flex-direction: column; min-height: 0; height: 100%; max-height: 100%; }
+.ws-video-dialog-form > .ws-dialog-head { flex: none; align-items: flex-start; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.ws-video-dialog-form > .ws-dialog-foot { flex: none; padding: 12px 18px; border-top: 1px solid var(--line); }
+.ws-video-head-copy { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.ws-video-dialog-form label { display: grid; gap: 5px; font-size: 13px; color: var(--ink2); }
+.ws-video-dialog-form :is(input, textarea) { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); color: var(--ink); font-size: 13.5px; }
+.ws-video-dialog-form :is(input, textarea):focus { outline: 0; border-color: var(--accent); }
+.ws-video-workbench { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 18px; align-items: start; padding: 16px 18px; }
+.ws-video-form { display: grid; gap: 11px; min-width: 0; }
+.ws-video-style-picker { display: grid; gap: 6px; }
+.ws-video-style-picker .ws-tabs { width: 100%; }
+.ws-video-style-picker .ws-tabs button { flex: 1; padding: 0 8px; font-size: 12.5px; }
+.ws-video-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ws-video-poster-box { gap: 8px; }
+.ws-video-live { display: grid; gap: 10px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); position: sticky; top: 0; }
+.ws-video-live-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; font-weight: 650; }
+.ws-video-live-canvas { padding: 14px; border-radius: 12px; background: #ffffff; border: 1px solid var(--line); color-scheme: light; }
+.ws-video-live-canvas > section { margin: 0 !important; }
+.ws-video-live-canvas.is-dark { background: #0f1218; border-color: #262b36; color-scheme: dark; }
+
+@container (max-width: 820px) {
+  .ws-video-workbench { grid-template-columns: minmax(0, 1fr); }
+  .ws-video-live { position: static; }
+}
+@container (max-width: 520px) {
+  .ws-video-grid-2 { grid-template-columns: minmax(0, 1fr); }
 }
