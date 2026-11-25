@@ -1,6 +1,7 @@
 import { balanceXhsArtboard } from './xhs-card-balance.js'
 import React from 'react'
 import { compressReferenceImageFile, extractClipboardImageFiles, loadBrowserImage } from './image-input.js'
+import { animateValues, SlidingTabs, useDirection, usePresence, usePresenceValue } from './motion.jsx'
 import {
   DERIVE_LIMITS,
   XHS_CARD_KINDS,
@@ -439,14 +440,14 @@ function renderLayerTreeNodes(node, selectedElId, onSelect, collapsedIds, onTogg
         {hasChildren ? (
           <button
             type="button"
-            className="ws-cd-tree-caret"
+            className={`ws-cd-tree-caret${isCollapsed ? ' is-collapsed' : ''}`}
             aria-label={isCollapsed ? '展开子图层' : '折叠子图层'}
             onClick={e => {
               e.stopPropagation()
               onToggleCollapse(node.id)
             }}
           >
-            {isCollapsed ? '▸' : '▾'}
+            ▾
           </button>
         ) : (
           <span className="ws-cd-tree-caret" />
@@ -580,13 +581,47 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
   const deckRefInputRef = React.useRef(null)
   const cardRefInputRef = React.useRef(null)
   const canvasRef = React.useRef(null)
+  const worldRef = React.useRef(null)
   const panRef = React.useRef(pan)
   const zoomRef = React.useRef(zoom)
+  const canvasAnimCancelRef = React.useRef(null)
+  const panRafRef = React.useRef(0)
+  const wheelCommitTimerRef = React.useRef(null)
   const treeWrapRef = React.useRef(null)
   const artboardRefs = React.useRef({})
 
   panRef.current = pan
   zoomRef.current = zoom
+
+  const { mounted: promptPopoverMounted, closing: promptPopoverClosing } = usePresence(promptPopoverOpen)
+  const { mounted: warningsMounted, closing: warningsClosing } = usePresence(Boolean(warningsOpen && record?.warnings?.length))
+  const { mounted: redesignConfirmMounted, closing: redesignConfirmClosing, value: activeRedesignConfirm } = usePresenceValue(redesignConfirm)
+
+  const stopCanvasAnim = React.useCallback(() => {
+    canvasAnimCancelRef.current?.()
+    canvasAnimCancelRef.current = null
+  }, [])
+
+  const applyLivePan = React.useCallback((nextX, nextY) => {
+    const x = Math.round(nextX)
+    const y = Math.round(nextY)
+    panRef.current = { x, y }
+    if (!panRafRef.current) {
+      panRafRef.current = requestAnimationFrame(() => {
+        panRafRef.current = 0
+        const node = worldRef.current
+        if (node) {
+          node.style.transform = `translate3d(${panRef.current.x}px, ${panRef.current.y}px, 0)`
+        }
+      })
+    }
+  }, [])
+
+  React.useEffect(() => () => {
+    stopCanvasAnim()
+    cancelAnimationFrame(panRafRef.current)
+    clearTimeout(wheelCommitTimerRef.current)
+  }, [stopCanvasAnim])
 
   React.useEffect(() => {
     setSelectedIndex(0)
@@ -621,6 +656,9 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
   const cards = draft?.cards ?? []
   const safeSelected = Math.min(selectedIndex, Math.max(0, cards.length - 1))
   const safeLightbox = lightboxIndex !== null && lightboxIndex >= 0 && lightboxIndex < cards.length ? lightboxIndex : null
+  const { mounted: lightboxMounted, closing: lightboxClosing, value: activeLightbox } = usePresenceValue(safeLightbox)
+  const lightboxDir = useDirection(activeLightbox ?? 0)
+  const lightboxSlideClass = lightboxDir > 0 ? 'ws-slide-next' : lightboxDir < 0 ? 'ws-slide-prev' : 'ws-view-enter'
   const selectedCard = cards[safeSelected] ?? null
   const articleImages = article.articleImages ?? []
 
@@ -1093,13 +1131,57 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
     && !card?.html
     && !(xhsJob.completedCards || []).includes(index),
   )
-  const lightboxCard = safeLightbox !== null ? cards[safeLightbox] : null
-  const lightboxPending = safeLightbox !== null && lightboxCard ? isCardPendingAt(safeLightbox, lightboxCard) : false
+  const lightboxCard = activeLightbox !== null ? cards[activeLightbox] : null
+  const lightboxPending = activeLightbox !== null && lightboxCard ? isCardPendingAt(activeLightbox, lightboxCard) : false
   const visibleIndexes = stageMode === 'focus' ? [safeSelected] : cards.map((_, i) => i)
   const gridCols = cards.length <= 3 ? Math.max(1, cards.length) : Math.min(4, cards.length)
   const stageGap = stageMode === 'row' && zoom < 0.2 ? 14 : 18
 
-  const fitCanvas = React.useCallback((modeOverride = stageMode, countOverride = null) => {
+  const animateCanvasTo = React.useCallback((nextZoom, nextPan, animate = false) => {
+    stopCanvasAnim()
+    const targetZ = Math.round(nextZoom * 100) / 100
+    const targetX = Math.round(nextPan.x)
+    const targetY = Math.round(nextPan.y)
+    if (!animate) {
+      zoomRef.current = targetZ
+      panRef.current = { x: targetX, y: targetY }
+      setZoom(targetZ)
+      setPan({ x: targetX, y: targetY })
+      return
+    }
+    const from = { x: panRef.current.x, y: panRef.current.y, zoom: zoomRef.current }
+    const to = { x: targetX, y: targetY, zoom: targetZ }
+    if (Math.abs(from.x - to.x) < 1 && Math.abs(from.y - to.y) < 1 && Math.abs(from.zoom - to.zoom) < 0.005) {
+      setZoom(targetZ)
+      setPan({ x: targetX, y: targetY })
+      return
+    }
+    canvasAnimCancelRef.current = animateValues({
+      from,
+      to,
+      onUpdate: frame => {
+        const z = Math.round(frame.zoom * 1000) / 1000
+        const x = Math.round(frame.x)
+        const y = Math.round(frame.y)
+        zoomRef.current = z
+        panRef.current = { x, y }
+        setZoom(z)
+        setPan({ x, y })
+      },
+      onComplete: () => {
+        canvasAnimCancelRef.current = null
+        zoomRef.current = targetZ
+        panRef.current = { x: targetX, y: targetY }
+        setZoom(targetZ)
+        setPan({ x: targetX, y: targetY })
+      },
+    })
+  }, [stopCanvasAnim])
+
+  const stageModeRef = React.useRef(stageMode)
+  stageModeRef.current = stageMode
+
+  const fitCanvas = React.useCallback((modeOverride = stageModeRef.current, countOverride = null, { animate = true } = {}) => {
     const el = canvasRef.current
     const cw = el?.clientWidth || 960
     const ch = el?.clientHeight || 700
@@ -1137,11 +1219,10 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
     }
     const nextX = Math.max(24, Math.round((cw - totalW) / 2))
     const nextY = Math.max(padTop, Math.round(padTop + (availH - totalH) / 2))
-    setZoom(nextZoom)
-    setPan({ x: nextX, y: nextY })
-  }, [stageMode, cards.length])
+    animateCanvasTo(nextZoom, { x: nextX, y: nextY }, animate)
+  }, [cards.length, animateCanvasTo])
 
-  const zoomAroundPoint = React.useCallback((rawNextZoom, clientPoint = null) => {
+  const zoomAroundPoint = React.useCallback((rawNextZoom, clientPoint = null, { animate = false } = {}) => {
     const prevZ = zoomRef.current
     const nextZ = Math.round(Math.max(0.1, Math.min(1.2, rawNextZoom)) * 100) / 100
     if (nextZ === prevZ) return
@@ -1151,24 +1232,23 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
     const cy = clientPoint && rect ? clientPoint.y - rect.top : (rect ? rect.height / 2 : 340)
     const prevPan = panRef.current
     const ratio = nextZ / Math.max(0.05, prevZ)
-    setZoom(nextZ)
-    setPan({
+    animateCanvasTo(nextZ, {
       x: Math.round(cx - (cx - prevPan.x) * ratio),
       y: Math.round(cy - (cy - prevPan.y) * ratio),
-    })
-  }, [])
+    }, animate)
+  }, [animateCanvasTo])
 
-  // 首次加载卡片、切换稿件或切换画布模式时自动适配画布居中
-  const fitKey = `${article.id}:${cards.length > 0 ? cards.length : (xhsJob ? 'job' : 'empty')}:${stageMode}`
+  // 首次加载卡片或切换稿件时自动适配画布居中（不打断手动切换单行/网格/单页的丝滑缩放）
+  const fitKey = `${article.id}:${cards.length > 0 ? cards.length : (xhsJob ? 'job' : 'empty')}`
   React.useLayoutEffect(() => {
     if (!cards.length && !xhsJob) return
     const raf = window.requestAnimationFrame(() => {
-      fitCanvas(stageMode, cards.length || 3)
+      fitCanvas(stageModeRef.current, cards.length || 3, { animate: false })
     })
     return () => window.cancelAnimationFrame(raf)
   }, [fitKey, fitCanvas])
 
-  // 绑定非 passive 滚轮事件：双指滑动平移画布，双指捏合 / Ctrl(Cmd)+滚轮 围绕光标平滑缩放
+  // 绑定非 passive 滚轮事件：双指滑动直接 rAF 跟手平移，双指捏合 / Ctrl(Cmd)+滚轮 围绕光标平滑缩放
   React.useEffect(() => {
     const el = canvasRef.current
     if (!el) return undefined
@@ -1176,19 +1256,21 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
       if (event.target?.closest?.('.ws-cd-hud-scrollable')) return
       if (!record && !xhsJob) return
       event.preventDefault()
+      stopCanvasAnim()
       if (event.ctrlKey || event.metaKey) {
         const factor = Math.exp(-event.deltaY * 0.008)
-        zoomAroundPoint(zoomRef.current * factor, { x: event.clientX, y: event.clientY })
+        zoomAroundPoint(zoomRef.current * factor, { x: event.clientX, y: event.clientY }, { animate: false })
       } else {
-        setPan(prev => ({
-          x: Math.round(prev.x - event.deltaX),
-          y: Math.round(prev.y - event.deltaY),
-        }))
+        applyLivePan(panRef.current.x - event.deltaX, panRef.current.y - event.deltaY)
+        clearTimeout(wheelCommitTimerRef.current)
+        wheelCommitTimerRef.current = setTimeout(() => {
+          setPan({ ...panRef.current })
+        }, 120)
       }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [record, xhsJob, zoomAroundPoint])
+  }, [record, xhsJob, zoomAroundPoint, stopCanvasAnim, applyLivePan])
 
   // 快捷键：按住 Space 临时抓手平移，V 选择，H 抓手，+/- 缩放，0 适配画布
   React.useEffect(() => {
@@ -1205,13 +1287,13 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
         else if (event.key === 'h' || event.key === 'H') setCanvasTool('hand')
         else if (event.key === '=' || event.key === '+') {
           event.preventDefault()
-          zoomAroundPoint(zoomRef.current + 0.05)
+          zoomAroundPoint(zoomRef.current + 0.05, null, { animate: true })
         } else if (event.key === '-') {
           event.preventDefault()
-          zoomAroundPoint(zoomRef.current - 0.05)
+          zoomAroundPoint(zoomRef.current - 0.05, null, { animate: true })
         } else if (event.key === '0') {
           event.preventDefault()
-          fitCanvas()
+          fitCanvas(stageMode, null, { animate: true })
         }
       }
     }
@@ -1227,7 +1309,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
     }
-  }, [safeLightbox, fitCanvas, zoomAroundPoint])
+  }, [safeLightbox, stageMode, fitCanvas, zoomAroundPoint])
 
   const handleCanvasMouseDown = event => {
     if (!record && !xhsJob) return
@@ -1238,19 +1320,18 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
     if (!shouldPan) return
 
     event.preventDefault()
+    stopCanvasAnim()
     setIsPanning(true)
     const startX = event.clientX
     const startY = event.clientY
     const startPan = { ...panRef.current }
 
     const onMove = moveEv => {
-      setPan({
-        x: Math.round(startPan.x + (moveEv.clientX - startX)),
-        y: Math.round(startPan.y + (moveEv.clientY - startY)),
-      })
+      applyLivePan(startPan.x + (moveEv.clientX - startX), startPan.y + (moveEv.clientY - startY))
     }
     const onUp = () => {
       setIsPanning(false)
+      setPan({ ...panRef.current })
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
@@ -1260,13 +1341,14 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
 
   const switchStageMode = nextMode => {
     setStageMode(nextMode)
-    fitCanvas(nextMode, nextMode === 'focus' ? 1 : cards.length)
+    fitCanvas(nextMode, nextMode === 'focus' ? 1 : cards.length, { animate: true })
   }
 
   const zoomPresets = [0.14, 0.18, 0.22, 0.26, 0.32, 0.45, 0.6, 0.8, 1]
-  const zoomOptions = zoomPresets.some(v => Math.abs(v - zoom) < 0.005)
+  const roundedZoom = Math.round(zoom * 100) / 100
+  const zoomOptions = zoomPresets.some(v => Math.abs(v - roundedZoom) < 0.005)
     ? zoomPresets
-    : [...zoomPresets, zoom].sort((a, b) => a - b)
+    : [...zoomPresets, roundedZoom].sort((a, b) => a - b)
 
   const renderPromptBar = ({ showRegenerate = false } = {}) => (
     <div className="ws-cd-prompt-bar" aria-label="视觉设计想法">
@@ -1483,7 +1565,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
           onMouseDown={handleCanvasMouseDown}
         >
           {/* 悬浮通知栈（进度条、冲突提示、排版建议弹层等，不挤压画布空间） */}
-          {(archived || pendingRedesignOffer || (dirty && baseChanged && !pendingRedesignOffer) || record?.stale || (xhsError && !xhsJob) || xhsJob || (warningsOpen && record?.warnings?.length)) ? (
+          {(archived || pendingRedesignOffer || (dirty && baseChanged && !pendingRedesignOffer) || record?.stale || (xhsError && !xhsJob) || xhsJob || warningsMounted) ? (
             <div className="ws-cd-canvas-notices ws-cd-hud">
               {archived ? <div className="ws-banner is-error"><span>归档稿件不能生成或修改派生，请先恢复。</span></div> : null}
 
@@ -1563,8 +1645,8 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                 </div>
               ) : null}
 
-              {warningsOpen && record?.warnings?.length ? (
-                <div className="ws-cd-warnings-popover ws-cd-hud-scrollable" role="status">
+              {warningsMounted && record?.warnings?.length ? (
+                <div className={`ws-cd-warnings-popover ws-cd-hud-scrollable${warningsClosing ? ' is-closing' : ''}`} role="status">
                   <div className="ws-cd-warnings-head">
                     <span>✓ 已生成成功 · 排版微调建议（可选，不影响导出）</span>
                     <button type="button" className="ws-cd-icon-btn" aria-label="关闭建议" onClick={() => setWarningsOpen(false)}>×</button>
@@ -1603,6 +1685,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
           {!record || !draft ? (
             xhsJob ? (
               <div
+                ref={worldRef}
                 className="ws-cd-canvas-world"
                 style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0)` }}
               >
@@ -1662,14 +1745,14 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                   data-tip="缩小画布 (-)"
                   data-tip-pos="bottom"
                   aria-label="缩小画布"
-                  onClick={() => zoomAroundPoint(zoom - 0.04)}
+                  onClick={() => zoomAroundPoint(zoomRef.current - 0.04, null, { animate: true })}
                 >
                   −
                 </button>
                 <select
                   aria-label="画布缩放比例"
-                  value={String(zoom)}
-                  onChange={e => zoomAroundPoint(Number(e.target.value))}
+                  value={String(Math.round(zoom * 100) / 100)}
+                  onChange={e => zoomAroundPoint(Number(e.target.value), null, { animate: true })}
                 >
                   {zoomOptions.map(v => (
                     <option key={v} value={String(v)}>{Math.round(v * 100)}%</option>
@@ -1680,7 +1763,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                   data-tip="放大画布 (+)"
                   data-tip-pos="bottom"
                   aria-label="放大画布"
-                  onClick={() => zoomAroundPoint(zoom + 0.04)}
+                  onClick={() => zoomAroundPoint(zoomRef.current + 0.04, null, { animate: true })}
                 >
                   +
                 </button>
@@ -1689,7 +1772,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                   type="button"
                   data-tip="居中适配全览 (0)"
                   data-tip-pos="bottom-end"
-                  onClick={() => fitCanvas()}
+                  onClick={() => fitCanvas(stageMode, null, { animate: true })}
                 >
                   适配
                 </button>
@@ -1697,6 +1780,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
 
               {/* 可自由平移的无限画布世界 */}
               <div
+                ref={worldRef}
                 className="ws-cd-canvas-world"
                 style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0)` }}
               >
@@ -1889,8 +1973,8 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
 
               {/* 底部中央悬浮工具坞（对齐 Claude Design：选择 / 抓手 / 适配 / 设计想法与参考图） */}
               <div className="ws-cd-dock-wrap ws-cd-hud">
-                {promptPopoverOpen ? (
-                  <div className="ws-cd-floating-popover ws-cd-hud-scrollable" role="dialog" aria-label="设计想法与参考图">
+                {promptPopoverMounted ? (
+                  <div className={`ws-cd-floating-popover ws-cd-hud-scrollable${promptPopoverClosing ? ' is-closing' : ''}`} role="dialog" aria-label="设计想法与参考图">
                     <div className="ws-cd-floating-popover-head">
                       <strong>✨ 整套设计想法与参考图</strong>
                       <button
@@ -1928,7 +2012,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                     type="button"
                     className="ws-cd-dock-btn"
                     title="居中适配全览 (0)"
-                    onClick={() => fitCanvas()}
+                    onClick={() => fitCanvas(stageMode, null, { animate: true })}
                   >
                     ⊡ 适配
                   </button>
@@ -1953,9 +2037,10 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
         </div>
       </div>
 
-      {record && draft && inspectorOpen ? (
+      {record && draft ? (
+        <div className={`ws-cd-inspector-shell${inspectorOpen ? '' : ' is-collapsed'}`} aria-hidden={!inspectorOpen || undefined} inert={!inspectorOpen ? '' : undefined}>
         <aside className="ws-cd-inspector is-docked" aria-label="画布属性与代码检查器">
-          <div className="ws-cd-tabs" role="tablist">
+          <SlidingTabs activeKey={inspectorTab} className="ws-cd-tabs" role="tablist">
             <button
               type="button"
               role="tab"
@@ -2002,9 +2087,9 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
             >
               ×
             </button>
-          </div>
+          </SlidingTabs>
 
-            <div className="ws-cd-inspector-body">
+            <div className="ws-cd-inspector-body ws-view-enter" key={inspectorTab}>
               {inspectorTab === 'properties' && selectedCard ? (
                 <>
                   <div className="ws-cd-tree-section">
@@ -2338,7 +2423,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
 
                         <div className="ws-cd-prop-row">
                           <span>Align</span>
-                          <div className="ws-cd-seg">
+                          <SlidingTabs activeKey={inspector.styles.textAlign} className="ws-cd-seg">
                             {[
                               { id: 'left', label: '左' },
                               { id: 'center', label: '中' },
@@ -2354,7 +2439,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                                 {al.label}
                               </button>
                             ))}
-                          </div>
+                          </SlidingTabs>
                         </div>
                       </div>
 
@@ -3118,16 +3203,17 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
               ) : null}
             </div>
         </aside>
+        </div>
       ) : null}
 
-      {redesignConfirm ? (
-        <div className="ws-scrim" role="presentation" onClick={event => { if (event.target === event.currentTarget) setRedesignConfirm(null) }}>
-          <div className="ws-dialog" role="dialog" aria-modal="true" aria-label={`确认重设计第 ${redesignConfirm.index + 1} 页`}>
+      {redesignConfirmMounted && activeRedesignConfirm ? (
+        <div className={`ws-scrim${redesignConfirmClosing ? ' is-closing' : ''}`} role="presentation" onClick={event => { if (event.target === event.currentTarget) setRedesignConfirm(null) }}>
+          <div className="ws-dialog" role="dialog" aria-modal="true" aria-label={`确认重设计第 ${activeRedesignConfirm.index + 1} 页`}>
             <div className="ws-dialog-head">
-              <h2 className="ws-dialog-title">第 {redesignConfirm.index + 1} 页有未保存修改</h2>
+              <h2 className="ws-dialog-title">第 {activeRedesignConfirm.index + 1} 页有未保存修改</h2>
             </div>
             <p>
-              你在第 {redesignConfirm.index + 1} 页有尚未保存的本地修改。直接重设计会基于服务端已保存版本重新生成并替换这一页（其他页的未保存修改不受影响）。你可以先保存再基于你的修改重设计，或直接覆盖本页。
+              你在第 {activeRedesignConfirm.index + 1} 页有尚未保存的本地修改。直接重设计会基于服务端已保存版本重新生成并替换这一页（其他页的未保存修改不受影响）。你可以先保存再基于你的修改重设计，或直接覆盖本页。
             </p>
             <div className="ws-dialog-foot">
               <button type="button" className="ws-btn" onClick={() => setRedesignConfirm(null)}>取消</button>
@@ -3135,7 +3221,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                 type="button"
                 className="ws-btn"
                 onClick={() => {
-                  const target = redesignConfirm
+                  const target = activeRedesignConfirm
                   setRedesignConfirm(null)
                   void executeRedesignCard(target.index, target.cardPrompt, { saveFirst: false, referenceImages: target.referenceImages || [] })
                 }}
@@ -3146,7 +3232,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                 type="button"
                 className="ws-btn is-primary"
                 onClick={() => {
-                  const target = redesignConfirm
+                  const target = activeRedesignConfirm
                   setRedesignConfirm(null)
                   void executeRedesignCard(target.index, target.cardPrompt, { saveFirst: true, referenceImages: target.referenceImages || [] })
                 }}
@@ -3158,36 +3244,37 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
         </div>
       ) : null}
 
-      {safeLightbox !== null && lightboxCard ? (
-        <div className="ws-scrim" onClick={() => setLightboxIndex(null)}>
+      {lightboxMounted && activeLightbox !== null && lightboxCard ? (
+        <div className={`ws-scrim${lightboxClosing ? ' is-closing' : ''}`} onClick={() => setLightboxIndex(null)}>
           <div
             className="ws-dialog ws-derive-lightbox"
             role="dialog"
             aria-modal="true"
-            aria-label={`第 ${safeLightbox + 1} 页卡片大图预览`}
+            aria-label={`第 ${activeLightbox + 1} 页卡片大图预览`}
             onClick={event => event.stopPropagation()}
           >
             <div className="ws-dialog-head">
               <strong className="ws-dialog-title">
-                第 {safeLightbox + 1} / {cards.length} 页 · {CARD_KIND_LABELS[lightboxCard.kind] ?? lightboxCard.kind}
+                第 {activeLightbox + 1} / {cards.length} 页 · {CARD_KIND_LABELS[lightboxCard.kind] ?? lightboxCard.kind}
               </strong>
               <button type="button" className="ws-btn" onClick={() => setLightboxIndex(null)}>关闭</button>
             </div>
             <div className="ws-derive-lightbox-body">
+              <div key={activeLightbox} className={lightboxSlideClass}>
               {lightboxPending ? (
                 <div
-                  className={`ws-cd-skeleton-card ${xhsJob?.activeCardIndex === safeLightbox ? 'is-active' : ''}`}
+                  className={`ws-cd-skeleton-card ${xhsJob?.activeCardIndex === activeLightbox ? 'is-active' : ''}`}
                   style={{ width: `${Math.round(1080 * 0.44)}px`, height: `${Math.round(1440 * 0.44)}px` }}
-                  aria-label={`第 ${safeLightbox + 1} 页正在精绘`}
+                  aria-label={`第 ${activeLightbox + 1} 页正在精绘`}
                 >
                   <span className="ws-cd-skel-badge">{CARD_KIND_LABELS[lightboxCard.kind] ?? lightboxCard.kind}</span>
-                  <strong className="ws-cd-skel-heading" style={{ fontSize: '20px' }}>{lightboxCard.heading || `第 ${safeLightbox + 1} 页`}</strong>
+                  <strong className="ws-cd-skel-heading" style={{ fontSize: '20px' }}>{lightboxCard.heading || `第 ${activeLightbox + 1} 页`}</strong>
                   <div className="ws-cd-skel-line is-short" />
                   <div className="ws-cd-skel-block" />
                   <div className="ws-cd-skel-status" style={{ fontSize: '14px' }}>
-                    {xhsJob?.activeCardIndex === safeLightbox
-                      ? `✨ 正在精绘第 ${safeLightbox + 1} 页，完成后自动展示…`
-                      : `排队等待精绘（第 ${safeLightbox + 1} 页），完成后自动展示…`}
+                    {xhsJob?.activeCardIndex === activeLightbox
+                      ? `✨ 正在精绘第 ${activeLightbox + 1} 页，完成后自动展示…`
+                      : `排队等待精绘（第 ${activeLightbox + 1} 页），完成后自动展示…`}
                   </div>
                 </div>
               ) : (
@@ -3198,7 +3285,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                   <div className="ws-cd-scale-layer" style={{ transform: 'scale(0.44)' }}>
                     <XhsArtboardShadow
                       html={ensureCardHtml(lightboxCard, {
-                        index: safeLightbox,
+                        index: activeLightbox,
                         total: cards.length,
                         author,
                         palette,
@@ -3215,12 +3302,13 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                   </div>
                 </div>
               )}
+              </div>
             </div>
             <div className="ws-dialog-foot">
               <button
                 type="button"
                 className="ws-btn"
-                disabled={safeLightbox === 0}
+                disabled={activeLightbox === 0}
                 onClick={() => setLightboxIndex(i => Math.max(0, (i ?? 0) - 1))}
               >
                 上一页
@@ -3228,7 +3316,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
               <button
                 type="button"
                 className="ws-btn"
-                disabled={safeLightbox >= cards.length - 1}
+                disabled={activeLightbox >= cards.length - 1}
                 onClick={() => setLightboxIndex(i => Math.min(cards.length - 1, (i ?? 0) + 1))}
               >
                 下一页
@@ -3239,14 +3327,14 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                 className="ws-btn"
                 disabled={lightboxPending}
                 onClick={() => {
-                  setSelectedIndex(safeLightbox)
+                  setSelectedIndex(activeLightbox)
                   setInspectorOpen(true)
                   setLightboxIndex(null)
                 }}
               >
                 编辑此页
               </button>
-              <button type="button" className="ws-btn is-primary" disabled={lightboxPending} onClick={() => downloadOneCard(safeLightbox)}>
+              <button type="button" className="ws-btn is-primary" disabled={lightboxPending} onClick={() => downloadOneCard(activeLightbox)}>
                 下载 PNG
               </button>
             </div>
@@ -3262,6 +3350,7 @@ export function DeriveView({ article, brand }) {
   const deriveDrafts = useStudio(s => s.deriveDrafts)
   const [tab, setTab] = React.useState('markdown')
   const [confirmState, setConfirmState] = React.useState(null)
+  const { mounted: confirmMounted, closing: confirmClosing, value: activeConfirm } = usePresenceValue(confirmState)
 
   const runGenerate = async (platform, variant, confirmOverwrite, designPrompt = '', referenceImages = []) => {
     const res = await generateDerivative({ id: article.id, platform, variant, designPrompt, referenceImages, confirmOverwrite })
@@ -3302,7 +3391,7 @@ export function DeriveView({ article, brand }) {
   return (
     <div className="ws-derive">
       <div className="ws-derive-head">
-        <div className="ws-tabs" role="tablist" aria-label="派生形态">
+        <SlidingTabs activeKey={tab} className="ws-tabs" role="tablist" aria-label="派生形态">
           {SUB_TABS.map(item => {
             const hasDraft = item.id !== 'markdown' && Boolean(deriveDrafts[deriveDraftKey(article.id, item.id)])
             return (
@@ -3319,35 +3408,35 @@ export function DeriveView({ article, brand }) {
               </button>
             )
           })}
-        </div>
+        </SlidingTabs>
         <span className="ws-muted ws-small">母稿 → 派生单向导出，复制或下载后直接发布，不进入排期。</span>
       </div>
 
-      <div className={`ws-derive-body ${tab === 'xhs' ? 'is-xhs-studio' : ''}`}>
+      <div key={tab} className={`ws-derive-body ws-view-enter ${tab === 'xhs' ? 'is-xhs-studio' : ''}`}>
         {tab === 'markdown' ? <MarkdownPanel article={article} /> : null}
         {tab === 'thread' ? <ThreadPanel article={article} pending={pending} onGenerate={handleGenerate} onDelete={handleDelete} /> : null}
         {tab === 'xhs' ? <XhsPanel article={article} brand={brand} pending={pending} onGenerate={handleGenerate} onDelete={handleDelete} /> : null}
       </div>
 
-      {confirmState ? (
-        <div className="ws-scrim" role="presentation" onClick={event => { if (event.target === event.currentTarget) setConfirmState(null) }}>
-          <div className="ws-dialog" role="dialog" aria-modal="true" aria-label={confirmState.type === 'delete' ? '确认删除派生' : '确认覆盖修改'}>
+      {confirmMounted && activeConfirm ? (
+        <div className={`ws-scrim${confirmClosing ? ' is-closing' : ''}`} role="presentation" onClick={event => { if (event.target === event.currentTarget) setConfirmState(null) }}>
+          <div className="ws-dialog" role="dialog" aria-modal="true" aria-label={activeConfirm.type === 'delete' ? '确认删除派生' : '确认覆盖修改'}>
             <div className="ws-dialog-head">
-              <h2 className="ws-dialog-title">{confirmState.type === 'delete' ? '确认删除派生' : '确认覆盖修改'}</h2>
+              <h2 className="ws-dialog-title">{activeConfirm.type === 'delete' ? '确认删除派生' : '确认覆盖修改'}</h2>
             </div>
             <p>
-              {confirmState.type === 'delete'
-                ? (confirmState.reason === 'unsaved'
+              {activeConfirm.type === 'delete'
+                ? (activeConfirm.reason === 'unsaved'
                   ? '你还有未保存的手改内容，删除后本地修改与这份派生稿都会清空，确定继续吗？'
                   : '这份派生稿你手动改过，删除后无法恢复，确定继续吗？')
-                : (confirmState.reason === 'unsaved'
+                : (activeConfirm.reason === 'unsaved'
                   ? '你还有未保存的手改内容，重新生成会丢弃当前修改并覆盖，确定继续吗？'
                   : '这份派生稿你手动改过，重新生成会覆盖当前内容，确定继续吗？')}
             </p>
             <div className="ws-dialog-foot">
               <button type="button" className="ws-btn" onClick={() => setConfirmState(null)}>取消</button>
               <button type="button" className="ws-btn is-primary" onClick={confirmAction}>
-                {confirmState.type === 'delete' ? '确定删除' : '确定重新生成'}
+                {activeConfirm.type === 'delete' ? '确定删除' : '确定重新生成'}
               </button>
             </div>
           </div>

@@ -1,6 +1,7 @@
 // 信息流卡片预览：按微信发表预览截图进行视觉模拟，展示订阅号信息流大图卡与转发给好友卡片。
 import React from 'react'
 import { buildFeedCardModel, FEED_PREVIEW_WIDTHS, MAX_FEED_DRAFT_TITLE_CHARS, MAX_FEED_MP_TITLE_CHARS } from './feed-preview-model.js'
+import { SlidingTabs } from './motion.jsx'
 
 export function FeedCardPreview({ article, brand, mp }) {
   const [widthId, setWidthId] = React.useState('375')
@@ -51,7 +52,7 @@ export function FeedCardPreview({ article, brand, mp }) {
   return (
     <section className="ws-feed" aria-label="信息流卡片预览">
       <div className="ws-feed-toolbar">
-        <div className="ws-tabs" role="radiogroup" aria-label="模拟手机屏宽">
+        <SlidingTabs activeKey={selectedWidth.id} className="ws-tabs" role="radiogroup" aria-label="模拟手机屏宽">
           {FEED_PREVIEW_WIDTHS.map(option => (
             <button
               key={option.id}
@@ -64,7 +65,7 @@ export function FeedCardPreview({ article, brand, mp }) {
               {option.label}
             </button>
           ))}
-        </div>
+        </SlidingTabs>
         <div className="ws-feed-status" role="status">
           <span
             className={`ws-feed-pill ${

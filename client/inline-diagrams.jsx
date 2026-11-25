@@ -8,6 +8,7 @@ import doodlePreview from './assets/inline-styles/tech-doodle.webp'
 import cartoonPreview from './assets/inline-styles/cartoon-infographic.webp'
 import saasPreview from './assets/inline-styles/saas-flat.webp'
 import { act, loadSettings, setState, useStudio } from './state.js'
+import { useDialogClose } from './motion.jsx'
 
 const INLINE_STYLE_PREVIEWS = {
   notebook: notebookPreview,
@@ -37,8 +38,7 @@ function openSettings(page) {
 
 function InlineModal({ label, children, onClose, className = '' }) {
   const modal = React.useRef(null)
-  const closeRef = React.useRef(onClose)
-  closeRef.current = onClose
+  const { closing, requestClose } = useDialogClose(onClose)
   React.useEffect(() => {
     const previous = document.activeElement
     const dialog = modal.current
@@ -48,14 +48,14 @@ function InlineModal({ label, children, onClose, className = '' }) {
       if (previous?.isConnected) previous.focus({ preventScroll: true })
     }
   }, [])
-  return <dialog ref={modal} className={`ws-dialog ws-inline-dialog ${className}`} aria-label={label}
-    onCancel={event => { event.preventDefault(); closeRef.current() }}
+  return <dialog ref={modal} className={`ws-dialog ws-inline-dialog ${className}${closing ? ' is-closing' : ''}`} aria-label={label}
+    onCancel={event => { event.preventDefault(); requestClose() }}
     onClick={event => {
       if (event.target !== event.currentTarget) return
       const bounds = event.currentTarget.getBoundingClientRect()
-      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeRef.current()
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) requestClose()
     }}>
-    {children}
+    {typeof children === 'function' ? children(requestClose) : children}
   </dialog>
 }
 
@@ -162,8 +162,8 @@ function GenerateDialog({ article, diagram, onClose }) {
     if (ok) onClose()
   }
   return <InlineModal label="生成正文插图" onClose={onClose} className="ws-inline-generate-dialog">
-    <form onSubmit={submit}>
-      <div className="ws-dialog-head"><h2 className="ws-dialog-title">生成插图</h2><CloseButton onClose={onClose} /></div>
+    {requestClose => <form onSubmit={submit}>
+      <div className="ws-dialog-head"><h2 className="ws-dialog-title">生成插图</h2><CloseButton onClose={requestClose} /></div>
       <p>{diagram.title}</p>
       <fieldset className="ws-inline-style-gallery" disabled={busy}>
         <legend>插图风格</legend>
@@ -181,8 +181,8 @@ function GenerateDialog({ article, diagram, onClose }) {
       {settings ? <p className="ws-muted ws-small">本次提供方：{IMAGE_PROVIDERS[provider]} · {modelName} · 16:9 PNG</p> : <p className="ws-shimmer">正在读取生图设置…</p>}
       {settings && !keyReady ? <p className="ws-warn">当前提供方还没有 API Key。<button type="button" className="ws-link" onClick={() => openSettings('cover')}>去设置</button></p> : null}
       <p className="ws-muted ws-small">点击生成才会调用生图接口；只生成一张，不上传图床，也不修改正文。</p>
-      <div className="ws-dialog-foot"><button type="button" className="ws-btn" disabled={busy} onClick={onClose}>取消</button><button type="submit" className="ws-btn is-primary" disabled={!style || !keyReady || busy}>{busy ? '正在提交…' : '生成插图'}</button></div>
-    </form>
+      <div className="ws-dialog-foot"><button type="button" className="ws-btn" disabled={busy} onClick={requestClose}>取消</button><button type="submit" className="ws-btn is-primary" disabled={!style || !keyReady || busy}>{busy ? '正在提交…' : '生成插图'}</button></div>
+    </form>}
   </InlineModal>
 }
 
@@ -198,8 +198,8 @@ function BlockDialog({ article, diagram, onClose }) {
     if (ok) onClose()
   }
   return <InlineModal label={diagram ? '重新选择插图位置' : '指定段落分析'} onClose={onClose}>
-    <form onSubmit={submit}>
-      <div className="ws-dialog-head"><h2 className="ws-dialog-title">{diagram ? '重新选位置' : '指定段落'}</h2><CloseButton onClose={onClose} /></div>
+    {requestClose => <form onSubmit={submit}>
+      <div className="ws-dialog-head"><h2 className="ws-dialog-title">{diagram ? '重新选位置' : '指定段落'}</h2><CloseButton onClose={requestClose} /></div>
       {diagram?.assetId ? <p className="ws-warn">只改变插入位置，旧图不会根据新段落重新生成。</p> : <p className="ws-muted ws-small">只分析所选段落的已保存内容，最多补充一条建议。</p>}
       <div className="ws-inline-block-picker">
         {article.blocks.map((block, index) => <label key={block.id} className={blockId === block.id ? 'is-on' : ''}>
@@ -207,8 +207,8 @@ function BlockDialog({ article, diagram, onClose }) {
           <strong>第 {index + 1} 段</strong><span>{block.text.replace(/\s+/g, ' ').slice(0, 140)}</span>
         </label>)}
       </div>
-      <div className="ws-dialog-foot"><button type="button" className="ws-btn" disabled={busy} onClick={onClose}>取消</button><button type="submit" className="ws-btn is-primary" disabled={!blockId || busy}>{busy ? '正在提交…' : diagram ? '保存位置' : '分析这一段'}</button></div>
-    </form>
+      <div className="ws-dialog-foot"><button type="button" className="ws-btn" disabled={busy} onClick={requestClose}>取消</button><button type="submit" className="ws-btn is-primary" disabled={!blockId || busy}>{busy ? '正在提交…' : diagram ? '保存位置' : '分析这一段'}</button></div>
+    </form>}
   </InlineModal>
 }
 
@@ -225,8 +225,8 @@ function InsertDialog({ article, diagram, cloudinaryReady, onClose }) {
     if (ok) onClose()
   }
   return <InlineModal label="确认插入正文插图" onClose={onClose}>
-    <form onSubmit={submit}>
-      <div className="ws-dialog-head"><h2 className="ws-dialog-title">确认插入正文</h2><CloseButton onClose={onClose} /></div>
+    {requestClose => <form onSubmit={submit}>
+      <div className="ws-dialog-head"><h2 className="ws-dialog-title">确认插入正文</h2><CloseButton onClose={requestClose} /></div>
       <img className="ws-inline-confirm-image" src={imageUrl(article, diagram)} alt={diagram.title} />
       <div className="ws-inline-target"><strong>插入到第 {diagram.anchorNumber} 段后</strong><p>{diagram.anchorExcerpt}</p></div>
       <p className="ws-muted ws-small">{diagram.publicUrl ? '这张图片已有可发表的 Cloudinary 地址，本次直接复用，不会重复上传。' : '图床去向：已配置的 Cloudinary。取得可发表的 HTTPS 地址后，才会在正文中插入普通 Markdown 图片。'}</p>
@@ -234,10 +234,10 @@ function InsertDialog({ article, diagram, cloudinaryReady, onClose }) {
       {!canInsert ? <p className="ws-warn">尚未配置图床。图片已保留，配置后可以直接插入。<button type="button" className="ws-link" onClick={() => openSettings('storage')}>去设置</button></p> : null}
       <div className="ws-dialog-foot">
         <a className="ws-btn" href={imageUrl(article, diagram, true)} download={`${diagram.title || '正文插图'}.png`}>下载生成图</a>
-        <button type="button" className="ws-btn" disabled={busy} onClick={onClose}>取消</button>
+        <button type="button" className="ws-btn" disabled={busy} onClick={requestClose}>取消</button>
         <button type="submit" className="ws-btn is-primary" disabled={!canInsert || (diagram.stale && !acceptStale) || busy}>{busy ? '正在上传并核对…' : '确认插入'}</button>
       </div>
-    </form>
+    </form>}
   </InlineModal>
 }
 
@@ -251,8 +251,10 @@ export function InlineDiagramDialog({ article, cloudinaryReady }) {
   if (dialog.mode === 'generate') return <GenerateDialog article={article} diagram={diagram} onClose={onClose} />
   if (dialog.mode === 'insert') return <InsertDialog article={article} diagram={diagram} cloudinaryReady={cloudinaryReady} onClose={onClose} />
   return <InlineModal label={`预览插图：${diagram.title}`} onClose={onClose} className="ws-inline-preview-dialog">
-    <div className="ws-dialog-head"><h2 className="ws-dialog-title">{diagram.title}</h2><CloseButton onClose={onClose} /></div>
-    <img className="ws-inline-full-image" src={imageUrl(article, diagram)} alt={diagram.title} />
-    <div className="ws-dialog-foot"><a className="ws-btn" href={imageUrl(article, diagram, true)} download={`${diagram.title || '正文插图'}.png`}>下载 PNG</a><button type="button" className="ws-btn" onClick={onClose}>关闭</button></div>
+    {requestClose => <>
+      <div className="ws-dialog-head"><h2 className="ws-dialog-title">{diagram.title}</h2><CloseButton onClose={requestClose} /></div>
+      <img className="ws-inline-full-image" src={imageUrl(article, diagram)} alt={diagram.title} />
+      <div className="ws-dialog-foot"><a className="ws-btn" href={imageUrl(article, diagram, true)} download={`${diagram.title || '正文插图'}.png`}>下载 PNG</a><button type="button" className="ws-btn" onClick={requestClose}>关闭</button></div>
+    </>}
   </InlineModal>
 }

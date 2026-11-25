@@ -1,6 +1,7 @@
 import React from 'react'
 import { plainOf, splitMarkdown } from '../src/article.js'
 import { countMarkdownImages, feishuImageUrls } from '../src/markdown-images.js'
+import { AnimatedNumber } from './motion.jsx'
 
 export function MarkdownImportFields({ Icon, value, onChange, locked, reading, onReadingChange }) {
   const [dragging, setDragging] = React.useState(false)
@@ -82,8 +83,8 @@ export function MarkdownImportFields({ Icon, value, onChange, locked, reading, o
         {preview ? <>
           <div className="ws-import-title"><span>识别到的标题</span><strong>{preview.title || '未识别到一级标题'}</strong></div>
           <dl className="ws-import-metrics">
-            <div><dt>估算字数</dt><dd>{preview.chars.toLocaleString('zh-CN')}</dd></div>
-            <div><dt>正文图片</dt><dd>{preview.images}</dd></div>
+            <div><dt>估算字数</dt><dd><AnimatedNumber value={preview.chars} format={v => Math.round(v).toLocaleString('zh-CN')} /></dd></div>
+            <div><dt>正文图片</dt><dd><AnimatedNumber value={preview.images} /></dd></div>
           </dl>
           <p className="ws-import-transfer"><Icon name="upload" />{preview.transfers
             ? `${preview.transfers} 张飞书图片将在导入后后台转存`

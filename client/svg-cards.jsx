@@ -1,5 +1,6 @@
 import React from 'react'
 import { act, copyRichText, getState, postJson, setState, toast, useStudio } from './state.js'
+import { useDialogClose } from './motion.jsx'
 import conceptPreview from './assets/svg-card-types/concept.webp'
 import stepsPreview from './assets/svg-card-types/steps.webp'
 import breakdownPreview from './assets/svg-card-types/breakdown.webp'
@@ -107,8 +108,7 @@ export function SvgCardBlock({ articleId, block, layoutPreferences }) {
 
 function SvgCardTypeDialog({ value, onChange, onClose }) {
   const modal = React.useRef(null)
-  const closeRef = React.useRef(onClose)
-  closeRef.current = onClose
+  const { closing, requestClose } = useDialogClose(onClose)
   React.useEffect(() => {
     const previous = document.activeElement
     const dialog = modal.current
@@ -119,7 +119,7 @@ function SvgCardTypeDialog({ value, onChange, onClose }) {
       if (previous?.isConnected) previous.focus({ preventScroll: true })
     }
   }, [])
-  const choose = kind => { onChange(kind); closeRef.current() }
+  const choose = kind => { onChange(kind); requestClose() }
   const navigate = event => {
     if (['Enter', ' '].includes(event.key)) {
       const kind = document.activeElement?.dataset.kind
@@ -135,14 +135,14 @@ function SvgCardTypeDialog({ value, onChange, onClose }) {
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? SVG_CARD_KINDS.length - 1 : Math.min(SVG_CARD_KINDS.length - 1, Math.max(0, current + offsets[event.key]))
     modal.current.querySelector(`[data-kind="${SVG_CARD_KINDS[next]}"]`)?.focus()
   }
-  return <dialog ref={modal} className="ws-dialog ws-svg-type-dialog" aria-label="选择动画卡类型"
-    onCancel={event => { event.preventDefault(); closeRef.current() }}
+  return <dialog ref={modal} className={`ws-dialog ws-svg-type-dialog${closing ? ' is-closing' : ''}`} aria-label="选择动画卡类型"
+    onCancel={event => { event.preventDefault(); requestClose() }}
     onClick={event => {
       if (event.target !== event.currentTarget) return
       const bounds = event.currentTarget.getBoundingClientRect()
-      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeRef.current()
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) requestClose()
     }}>
-    <div className="ws-dialog-head"><div><h2 className="ws-dialog-title">选择动画卡类型</h2><p className="ws-muted ws-small">示意图只展示版式，实际内容根据所选段落生成。</p></div><button type="button" className="ws-icon-btn" aria-label="关闭" onClick={closeRef.current}>×</button></div>
+    <div className="ws-dialog-head"><div><h2 className="ws-dialog-title">选择动画卡类型</h2><p className="ws-muted ws-small">示意图只展示版式，实际内容根据所选段落生成。</p></div><button type="button" className="ws-icon-btn" aria-label="关闭" onClick={requestClose}>×</button></div>
     <div className="ws-svg-type-grid" role="radiogroup" aria-label="动画卡类型" onKeyDown={navigate}>
       {SVG_CARD_KINDS.map(kind => <button type="button" key={kind} data-kind={kind} role="radio" aria-checked={value === kind} tabIndex={value === kind ? 0 : -1}
         className={`ws-svg-type-option ${value === kind ? 'is-on' : ''}`} onClick={() => choose(kind)}>

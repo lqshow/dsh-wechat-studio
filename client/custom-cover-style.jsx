@@ -12,6 +12,7 @@ import {
   markPreviewStaleOnDraftChange,
 } from './custom-cover-style-model.js'
 import { compressReferenceImageFile, extractClipboardImageFiles } from './image-input.js'
+import { SlidingTabs, useDialogClose, useDirection } from './motion.jsx'
 import {
   analyzeCustomCoverStyle,
   closeCustomCoverStyleWizard,
@@ -267,6 +268,15 @@ export function CustomCoverStyleWizard() {
   )
   const ownTestRunning = ownTestJob?.status === 'running'
 
+  const [preserveClose, setPreserveClose] = React.useState(false)
+  const preserveCloseRef = React.useRef(false)
+  preserveCloseRef.current = preserveClose
+  const { closing, requestClose } = useDialogClose(() => {
+    closeCustomCoverStyleWizard({ preserveSession: preserveCloseRef.current })
+  })
+  const stepDir = useDirection(step)
+  const stepClass = stepDir > 0 ? 'ws-slide-next' : stepDir < 0 ? 'ws-slide-prev' : 'ws-view-enter'
+
   const handleClose = () => {
     if (busy) return
     if (dirty || ownTestRunning) {
@@ -275,7 +285,9 @@ export function CustomCoverStyleWizard() {
         : '当前自定义风格尚未保存，确认放弃修改？'
       if (!window.confirm(msg)) return
     }
-    closeCustomCoverStyleWizard({ preserveSession: ownTestRunning })
+    preserveCloseRef.current = ownTestRunning
+    setPreserveClose(ownTestRunning)
+    requestClose()
   }
   closeRef.current = handleClose
 
@@ -441,7 +453,7 @@ export function CustomCoverStyleWizard() {
 
   return (
     <div
-      className="ws-scrim"
+      className={`ws-scrim${closing ? ' is-closing' : ''}`}
       onMouseDown={event => { if (event.target === event.currentTarget) handleClose() }}
     >
       <section
@@ -476,7 +488,7 @@ export function CustomCoverStyleWizard() {
             <span className="ws-shimmer">正在读取自定义风格详情…</span>
           </div>
         ) : step === 1 ? (
-          <form className="ws-custom-cover-step" onSubmit={onAnalyze}>
+          <form key="cover-step-1" className={`ws-custom-cover-step ${stepClass}`} onSubmit={onAnalyze}>
             <div className="ws-custom-cover-section">
               <div className="ws-style-field-head">
                 <span>参考封面图（可选，最多 {CUSTOM_COVER_STYLE_LIMITS.maxReferenceImages} 张）</span>
@@ -567,7 +579,7 @@ export function CustomCoverStyleWizard() {
             </div>
           </form>
         ) : (
-          <div className="ws-custom-cover-step ws-custom-cover-step2">
+          <div key="cover-step-2" className={`ws-custom-cover-step ws-custom-cover-step2 ${stepClass}`}>
             <div className="ws-custom-cover-columns">
               <div className="ws-custom-cover-left">
                 <label className="ws-field">
@@ -745,7 +757,7 @@ export function CustomCoverStyleWizard() {
                 </label>
 
                 <div className="ws-custom-cover-test-bar">
-                  <div className="ws-cover-segments" role="radiogroup" aria-label="试生成分辨率">
+                  <SlidingTabs activeKey={resolution} className="ws-cover-segments" role="radiogroup" aria-label="试生成分辨率">
                     {COVER_RESOLUTIONS.map(res => (
                       <label key={res}>
                         <input
@@ -759,7 +771,7 @@ export function CustomCoverStyleWizard() {
                         <span>{res}</span>
                       </label>
                     ))}
-                  </div>
+                  </SlidingTabs>
                   <button
                     type="button"
                     className="ws-btn"

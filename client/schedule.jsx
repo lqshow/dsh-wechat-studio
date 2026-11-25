@@ -2,6 +2,7 @@
 import React from 'react'
 import { act, setState, toast, useStudio } from './state.js'
 import { addDays, atOn, dayKey, isOverdue, mondayOf, parseDay } from '../src/schedule-time.js'
+import { AnimatedNumber, scrollBehavior, SlidingTabs, useDialogClose, useDirection, usePresence } from './motion.jsx'
 import { ScheduleAgenda } from './schedule-agenda.jsx'
 import { CoverThumb, dateLabel, Icon, inputTime, openDraft, pad, pubSlot, ReadinessRing, timeLabel, weekdayName } from './schedule-shared.jsx'
 
@@ -18,10 +19,10 @@ const zoneLabel = date => {
   return `${Intl.DateTimeFormat().resolvedOptions().timeZone}（UTC${sign}${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}）`
 }
 const slotOf = iso => { const d = new Date(iso); return SLOTS.find(s => s.hour === d.getHours() && d.getMinutes() === 0) ?? SLOTS[3] }
-function DockCard({ draft, onPick, onDragStart, onDragEnd }) {
+function DockCard({ draft, dragging, onPick, onDragStart, onDragEnd }) {
   const missing = draft.readiness.total - draft.readiness.done
   return (
-    <article className="ws-sched-card" draggable onDragStart={e => onDragStart(e, draft)} onDragEnd={onDragEnd}>
+    <article className={`ws-sched-card${dragging ? ' is-dragging' : ''}`} draggable onDragStart={e => onDragStart(e, draft)} onDragEnd={onDragEnd}>
       <div className="ws-sched-card-top">
         <CoverThumb draft={draft} />
         <div className="ws-sched-card-copy">
@@ -54,11 +55,11 @@ function CardMenu({ children }) {
   return <details className="ws-sched-card-menu"><summary>更多</summary><div>{children}</div></details>
 }
 
-function ScheduledCard({ draft, now, onPick, onUnschedule, onPublish, onDragStart, onDragEnd }) {
+function ScheduledCard({ draft, now, dragging, located, onPick, onUnschedule, onPublish, onDragStart, onDragEnd }) {
   const missing = draft.readiness.items.filter(i => !i.done)
   const overdue = isOverdue(draft.scheduledFor, now)
   return (
-    <article id={`ws-sched-entry-${draft.id}`} tabIndex={-1} className={`ws-sched-entry ${overdue ? 'is-overdue' : ''} ${missing.length ? 'is-notready' : ''}`} draggable onDragStart={e => onDragStart(e, draft)} onDragEnd={onDragEnd}>
+    <article id={`ws-sched-entry-${draft.id}`} tabIndex={-1} className={`ws-sched-entry ${overdue ? 'is-overdue' : ''} ${missing.length ? 'is-notready' : ''} ${dragging ? 'is-dragging' : ''} ${located ? 'is-locate-pulse' : ''}`} draggable onDragStart={e => onDragStart(e, draft)} onDragEnd={onDragEnd}>
       <div className="ws-sched-entry-head">
         <span className="ws-sched-time">{timeLabel(draft.scheduledFor)}</span>
         <div className="ws-sched-entry-status">{overdue ? <span className="ws-sched-overdue">过点</span> : null}<ReadinessDetails readiness={draft.readiness} /></div>
@@ -72,12 +73,12 @@ function ScheduledCard({ draft, now, onPick, onUnschedule, onPublish, onDragStar
   )
 }
 
-function PublishedCard({ draft, onCorrect, onUnpublish }) {
+function PublishedCard({ draft, located, onCorrect, onUnpublish }) {
   const planned = draft.scheduledFor
   const actual = draft.publishedAt
   const crossDay = planned && dayKey(new Date(planned)) !== dayKey(new Date(actual))
   return (
-    <article id={`ws-sched-entry-${draft.id}`} tabIndex={-1} className="ws-sched-entry is-published">
+    <article id={`ws-sched-entry-${draft.id}`} tabIndex={-1} className={`ws-sched-entry is-published${located ? ' is-locate-pulse' : ''}`}>
       <div className="ws-sched-entry-head">
         <span className="ws-sched-time">{planned ? `${crossDay ? `${dateLabel(planned)} ` : ''}${timeLabel(planned)}` : timeLabel(actual)}</span>
         <span className="ws-sched-published-tag" role="img" aria-label="已发" title="已发"><Icon name="check" size={11} /></span>
@@ -97,10 +98,9 @@ function PublishedCard({ draft, onCorrect, onUnpublish }) {
 
 function ScheduleModal({ label, onClose, onSubmit, returnFocusId, children }) {
   const modal = React.useRef(null)
-  const closeRef = React.useRef(onClose)
   const returnFocusRef = React.useRef(returnFocusId)
-  closeRef.current = onClose
   returnFocusRef.current = returnFocusId
+  const { closing, requestClose } = useDialogClose(onClose)
   React.useEffect(() => {
     const previous = document.activeElement
     const dialog = modal.current
@@ -108,19 +108,18 @@ function ScheduleModal({ label, onClose, onSubmit, returnFocusId, children }) {
     dialog.querySelector('[data-autofocus]')?.focus()
     return () => {
       if (dialog.open) dialog.close()
-      if (dialog.open) dialog.close()
       if (previous?.isConnected) previous.focus({ preventScroll: true })
       else (document.getElementById(`ws-sched-entry-${returnFocusRef.current}`) ?? document.querySelector('.ws-sched-notice button'))?.focus({ preventScroll: true })
     }
   }, [])
-  return <dialog ref={modal} className="ws-dialog ws-sched-picker" aria-label={label}
-    onCancel={event => { event.preventDefault(); closeRef.current() }}
+  return <dialog ref={modal} className={`ws-dialog ws-sched-picker${closing ? ' is-closing' : ''}`} aria-label={label}
+    onCancel={event => { event.preventDefault(); requestClose() }}
     onClick={event => {
       if (event.target !== event.currentTarget) return
       const bounds = event.currentTarget.getBoundingClientRect()
-      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeRef.current()
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) requestClose()
     }}>
-    <form onSubmit={onSubmit}>{children}</form>
+    <form onSubmit={onSubmit}>{typeof children === 'function' ? children(requestClose) : children}</form>
   </dialog>
 }
 
@@ -146,6 +145,7 @@ function DraftSelect({ dock, id, onChange }) {
     if (open) listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' })
   }, [open, active, resultKey])
   const pick = draft => { onChange(draft.id); setQuery(''); setOpen(false) }
+  const { mounted: listMounted, closing: listClosing } = usePresence(open)
   const onKeyDown = event => {
     if (event.key === 'Escape' && open) {
       event.preventDefault()
@@ -170,8 +170,8 @@ function DraftSelect({ dock, id, onChange }) {
         onFocus={() => { setQuery(''); setOpen(true) }} onClick={() => { if (!open) { setQuery(''); setOpen(true) } }}
         onChange={event => { onChange(''); setQuery(event.target.value); setOpen(true) }} onKeyDown={onKeyDown} />
       <Icon name="chevron" size={14} />
-      {open ? (
-        <ul className="ws-sched-choose-list" id={listId} role="listbox" aria-label="稿件搜索结果" ref={listRef}>
+      {listMounted ? (
+        <ul className={`ws-sched-choose-list${listClosing ? ' is-closing' : ''}`} id={listId} role="listbox" aria-label="稿件搜索结果" ref={listRef}>
           {results.map((draft, index) => (
             <li key={draft.id} id={`${listId}-${draft.id}`} role="option" aria-selected={draft.id === id} data-active={index === active}
               className={`ws-sched-choose-opt ${draft.id === id ? 'is-on' : ''}`} title={draft.title}
@@ -231,9 +231,10 @@ function SchedulePicker({ data, picker, onClose, onSave, onSaved }) {
   }
   return (
     <ScheduleModal label="安排发布时间" onClose={onClose} onSubmit={submit} returnFocusId={id}>
+      {requestClose => <>
       <div className="ws-sched-picker-head">
         <h2>{chosen?.scheduledFor ? '改期' : '排一篇'}</h2>
-        <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={onClose}><Icon name="close" /></button>
+        <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={requestClose}><Icon name="close" /></button>
       </div>
       {picker.id ? <p className="ws-sched-picker-title">{chosen?.title}</p> : (
         <div className="ws-sched-field">选稿件
@@ -251,9 +252,10 @@ function SchedulePicker({ data, picker, onClose, onSave, onSaved }) {
       {previewAt ? <p className="ws-sched-selection">已选时段：{dateLabel(previewAt)} {weekdayName(new Date(previewAt))} {timeLabel(previewAt)}</p> : null}
       {collision ? <p className="ws-warn ws-small">此时段已有安排，仍可继续排入。</p> : null}
       <div className="ws-sched-picker-actions">
-        <button type="button" className="ws-btn" onClick={onClose}>取消</button>
+        <button type="button" className="ws-btn" onClick={requestClose}>取消</button>
         <button type="submit" className="ws-btn is-primary" disabled={!id || !day || Boolean(pending) || Boolean(selectionMessage)}>排上日历</button>
       </div>
+      </>}
     </ScheduleModal>
   )
 }
@@ -278,9 +280,10 @@ function PublishDialog({ draft, now, onClose, onSave }) {
   }
   return (
     <ScheduleModal label={correcting ? '更正发表时间' : '标记已发'} onClose={onClose} onSubmit={submit} returnFocusId={draft.id}>
+      {requestClose => <>
       <div className="ws-sched-picker-head">
         <h2>{correcting ? '更正发表时间' : '标记已发'}</h2>
-        <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={onClose}><Icon name="close" /></button>
+        <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={requestClose}><Icon name="close" /></button>
       </div>
       <p className="ws-sched-picker-title">{draft.title}</p>
       <label className="ws-sched-field">实际发表时间
@@ -288,9 +291,10 @@ function PublishDialog({ draft, now, onClose, onSave }) {
       </label>
       <p className="ws-muted ws-small">{legacy ? '旧记录只能确认标记时间，请填写这篇稿件的真实发表时间。' : '可补记过去的时间；这里记录的是实际发表时间，不是点击标记的时间。'}</p>
       <div className="ws-sched-picker-actions">
-        <button type="button" className="ws-btn" onClick={onClose}>取消</button>
+        <button type="button" className="ws-btn" onClick={requestClose}>取消</button>
         <button type="submit" className="ws-btn is-primary" disabled={Boolean(pending)}>{correcting ? '保存更正' : '记录已发'}</button>
       </div>
+      </>}
     </ScheduleModal>
   )
 }
@@ -301,11 +305,16 @@ export function ScheduleView({ data }) {
   const [picker, setPicker] = React.useState(null)
   const [publishDraft, setPublishDraft] = React.useState(null)
   const [overDay, setOverDay] = React.useState(null)
+  const [dockOver, setDockOver] = React.useState(false)
+  const [draggingId, setDraggingId] = React.useState(null)
   const [dockExpanded, setDockExpanded] = React.useState(false)
   const [dockQuery, setDockQuery] = React.useState('')
   const [dockFilter, setDockFilter] = React.useState('all')
   const [scheduleNotice, setScheduleNotice] = React.useState(null)
   const [locateId, setLocateId] = React.useState(null)
+  const [pulseId, setPulseId] = React.useState(null)
+  const weekDir = useDirection(weekKey)
+  const weekSlideClass = weekDir > 0 ? 'ws-slide-next' : weekDir < 0 ? 'ws-slide-prev' : ''
   const cardLocks = React.useRef(new Set())
   const pending = useStudio(s => s.pending)
   React.useEffect(() => {
@@ -319,10 +328,16 @@ export function ScheduleView({ data }) {
     if (!locateId) return
     const card = document.getElementById(`ws-sched-entry-${locateId}`)
     if (!card) return
-    card.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    card.scrollIntoView({ block: 'center', behavior: scrollBehavior() })
     card.focus({ preventScroll: true })
+    setPulseId(locateId)
     setLocateId(null)
   }, [locateId, weekKey, data.articles])
+  React.useEffect(() => {
+    if (!pulseId) return undefined
+    const timer = setTimeout(() => setPulseId(null), 950)
+    return () => clearTimeout(timer)
+  }, [pulseId])
   const today = new Date(now)
   const currentWeekKey = dayKey(mondayOf(today))
   const monday = parseDay(weekKey)
@@ -364,9 +379,16 @@ export function ScheduleView({ data }) {
     toast('已记录发表时间')
     return true
   })
-  const dragStart = (e, draft) => { e.dataTransfer.setData('text/plain', draft.id); e.dataTransfer.effectAllowed = 'move' }
+  const dragStart = (e, draft) => {
+    e.dataTransfer.setData('text/plain', draft.id)
+    e.dataTransfer.effectAllowed = 'move'
+    setDraggingId(draft.id)
+  }
+  const dragEnd = () => { setOverDay(null); setDockOver(false); setDraggingId(null) }
   const dropOnDay = async (id, key) => {
     setOverDay(null)
+    setDockOver(false)
+    setDraggingId(null)
     const draft = active.find(a => a.id === id)
     if (!draft || draft.publishedAt || pending) return
     if (draft.scheduledFor && dayKey(new Date(draft.scheduledFor)) === key) return
@@ -381,6 +403,8 @@ export function ScheduleView({ data }) {
   }
   const dropOnDock = async id => {
     setOverDay(null)
+    setDockOver(false)
+    setDraggingId(null)
     const draft = active.find(a => a.id === id)
     if (!draft?.scheduledFor || pending) return
     if (await withCardLock(id, () => act('schedule/clear', { id }))) toast('已移回待排')
@@ -398,9 +422,9 @@ export function ScheduleView({ data }) {
             <div className="ws-dh-title-row">
               <h1>排期</h1>
               <p className="ws-dh-dateline">
-                <span><b>{dock.length}</b> 篇待排</span>
+                <span><b><AnimatedNumber value={dock.length} /></b> 篇待排</span>
                 <span aria-hidden="true">·</span>
-                <span>所选周已发 <b>{weekPublished}</b> 篇</span>
+                <span>所选周已发 <b><AnimatedNumber value={weekPublished} /></b> 篇</span>
                 <span aria-hidden="true">·</span>
                 <span>{zoneLabel(today)}</span>
               </p>
@@ -414,34 +438,37 @@ export function ScheduleView({ data }) {
           </div>
         </header>
         <div className="ws-sched-body">
-          <aside className={`ws-sched-dock ${dockExpanded ? 'is-expanded' : ''}`} aria-label="待排稿件"
-            onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}
+          <aside className={`ws-sched-dock ${dockExpanded ? 'is-expanded' : ''} ${dockOver ? 'is-over' : ''}`} aria-label="待排稿件"
+            onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDockOver(true) }}
+            onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDockOver(false) }}
             onDrop={e => { e.preventDefault(); dropOnDock(e.dataTransfer.getData('text/plain')) }}>
-            <h2 className="ws-pane-title">待排 <span>{dock.length}</span><small>就绪 {readyDock.length}</small></h2>
+            <h2 className="ws-pane-title">待排 <span><AnimatedNumber value={dock.length} /></span><small>就绪 {readyDock.length}</small></h2>
             <button type="button" className="ws-sched-dock-toggle" aria-expanded={dockExpanded} aria-controls="ws-sched-dock-content" onClick={() => setDockExpanded(value => !value)}>待排 {dock.length} 篇 · 就绪 {readyDock.length} 篇<Icon name="chevron" size={14} /></button>
-            <div className="ws-sched-dock-content" id="ws-sched-dock-content">
-              {dock.length ? <div className="ws-sched-dock-tools">
-                <input type="search" aria-label="搜索待排稿件" placeholder="搜索稿件" value={dockQuery} onChange={event => setDockQuery(event.target.value)} />
-                <div className="ws-sched-dock-filters" role="group" aria-label="待排就绪筛选">
-                  <button type="button" aria-pressed={dockFilter === 'all'} className={dockFilter === 'all' ? 'is-on' : ''} onClick={() => setDockFilter('all')}>全部</button>
-                  <button type="button" aria-pressed={dockFilter === 'ready'} className={dockFilter === 'ready' ? 'is-on' : ''} onClick={() => setDockFilter('ready')}>就绪</button>
-                </div>
-                <span className="ws-muted ws-small" role="status">显示 {visibleDock.length} / {dock.length} 篇</span>
-              </div> : null}
-              {visibleDock.map(d => <DockCard key={d.id} draft={d} onPick={pickFor} onDragStart={dragStart} onDragEnd={() => setOverDay(null)} />)}
-              {dock.length && !visibleDock.length ? <div className="ws-muted ws-small"><p>没有匹配的待排稿件。</p><button type="button" className="ws-link" onClick={() => { setDockQuery(''); setDockFilter('all') }}>清空搜索与筛选</button></div> : null}
-              {!dock.length ? <div className="ws-muted ws-small">
-                <p>{!active.length ? '还没有稿件，先写一篇再来排期。' : scheduled.length ? '没有待排稿件，可从日历改期或取消。' : '当前没有待排稿件。'}</p>
-                {!active.length ? <button type="button" className="ws-link" onClick={() => setState({ module: 'paper', paperHome: true })}>去写第一篇</button> : null}
-              </div> : null}
-              <p className="ws-muted ws-small ws-sched-dock-hint">拖到某天默认排到晚 20:00；已排稿件改期保留原时分。</p>
+            <div className="ws-sched-dock-collapse">
+              <div className="ws-sched-dock-content" id="ws-sched-dock-content">
+                {dock.length ? <div className="ws-sched-dock-tools">
+                  <input type="search" aria-label="搜索待排稿件" placeholder="搜索稿件" value={dockQuery} onChange={event => setDockQuery(event.target.value)} />
+                  <SlidingTabs activeKey={dockFilter} className="ws-sched-dock-filters" role="group" aria-label="待排就绪筛选">
+                    <button type="button" aria-pressed={dockFilter === 'all'} className={dockFilter === 'all' ? 'is-on' : ''} onClick={() => setDockFilter('all')}>全部</button>
+                    <button type="button" aria-pressed={dockFilter === 'ready'} className={dockFilter === 'ready' ? 'is-on' : ''} onClick={() => setDockFilter('ready')}>就绪</button>
+                  </SlidingTabs>
+                  <span className="ws-muted ws-small" role="status">显示 {visibleDock.length} / {dock.length} 篇</span>
+                </div> : null}
+                {visibleDock.map(d => <DockCard key={d.id} draft={d} dragging={draggingId === d.id} onPick={pickFor} onDragStart={dragStart} onDragEnd={dragEnd} />)}
+                {dock.length && !visibleDock.length ? <div className="ws-muted ws-small"><p>没有匹配的待排稿件。</p><button type="button" className="ws-link" onClick={() => { setDockQuery(''); setDockFilter('all') }}>清空搜索与筛选</button></div> : null}
+                {!dock.length ? <div className="ws-muted ws-small">
+                  <p>{!active.length ? '还没有稿件，先写一篇再来排期。' : scheduled.length ? '没有待排稿件，可从日历改期或取消。' : '当前没有待排稿件。'}</p>
+                  {!active.length ? <button type="button" className="ws-link" onClick={() => setState({ module: 'paper', paperHome: true })}>去写第一篇</button> : null}
+                </div> : null}
+                <p className="ws-muted ws-small ws-sched-dock-hint">拖到某天默认排到晚 20:00；已排稿件改期保留原时分。</p>
+              </div>
             </div>
           </aside>
           <section className="ws-sched-main" aria-label="排期议程与周日历">
             <ScheduleAgenda scheduled={scheduled} now={now} onPublish={publish} onReschedule={pickFor} onUnschedule={unschedule} onLocate={locate} />
             {scheduleNotice ? <div className="ws-sched-notice" role="status">{scheduleNotice.text}<button type="button" className="ws-link" onClick={() => { setWeekKey(scheduleNotice.targetWeek); setScheduleNotice(null) }}>查看当周</button></div> : null}
             {!scheduled.length && !published.length ? <p className="ws-muted ws-small">还没有排期，从待排稿件选一篇，或点某日的「＋」。</p> : null}
-            <div className="ws-sched-week">
+            <div key={weekKey} className={`ws-sched-week ${weekSlideClass}`}>
               {days.map(date => {
                 const key = dayKey(date)
                 const rows = byDay(key)
@@ -453,8 +480,8 @@ export function ScheduleView({ data }) {
                     <header className="ws-sched-day-head"><span>{weekdayName(date)} <b>{date.getMonth() + 1}/{date.getDate()}</b></span><button type="button" className="ws-icon-btn" aria-label={`在 ${key} 排一篇`} title="排一篇" onClick={() => setPicker({ id: null, day: key })}><Icon name="plus" size={14} /></button></header>
                     <div className="ws-sched-day-list">
                       {rows.map(d => d.publishedAt
-                        ? <PublishedCard key={d.id} draft={d} onCorrect={publish} onUnpublish={unpublishDraft} />
-                        : <ScheduledCard key={d.id} draft={d} now={now} onPick={pickFor} onUnschedule={unschedule} onPublish={publish} onDragStart={dragStart} onDragEnd={() => setOverDay(null)} />)}
+                        ? <PublishedCard key={d.id} draft={d} located={pulseId === d.id} onCorrect={publish} onUnpublish={unpublishDraft} />
+                        : <ScheduledCard key={d.id} draft={d} now={now} dragging={draggingId === d.id} located={pulseId === d.id} onPick={pickFor} onUnschedule={unschedule} onPublish={publish} onDragStart={dragStart} onDragEnd={dragEnd} />)}
                       {!rows.length ? <span className="ws-sched-empty">暂无安排</span> : null}
                     </div>
                   </div>

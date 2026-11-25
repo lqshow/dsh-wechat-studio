@@ -1,5 +1,6 @@
 import React from 'react'
 import { pickableStyleArticles } from '../src/writing-style-shared.js'
+import { useDialogClose, useDirection } from './motion.jsx'
 import {
   analyzeStyle,
   applyStyle,
@@ -276,11 +277,14 @@ export function WritingStyleWizard() {
     setBusy('')
   }, [])
 
-  const close = React.useCallback(() => {
+  const closeImmediate = React.useCallback(() => {
     if (busy === 'apply') return
     if (busy) cancelRunning()
     setState({ dialog: returnTo === 'new' ? 'new' : null, styleWizardReturnTo: null })
   }, [busy, cancelRunning, returnTo])
+  const { closing, requestClose: close } = useDialogClose(closeImmediate)
+  const stepDir = useDirection(step)
+  const stepClass = stepDir > 0 ? 'ws-slide-next' : stepDir < 0 ? 'ws-slide-prev' : 'ws-view-enter'
 
   React.useEffect(() => {
     const onKey = e => {
@@ -441,7 +445,7 @@ export function WritingStyleWizard() {
   ]
 
   return (
-    <div className="ws-scrim" onMouseDown={e => { if (e.target === e.currentTarget) close() }}>
+    <div className={`ws-scrim${closing ? ' is-closing' : ''}`} onMouseDown={e => { if (e.target === e.currentTarget) close() }}>
       <section className="ws-dialog ws-style-wizard" role="dialog" aria-modal="true" aria-label="我的写作风格">
         <div className="ws-dialog-head">
           <div>
@@ -459,7 +463,7 @@ export function WritingStyleWizard() {
 
         <div className="ws-style-wizard-body">
           {step === 1 ? (
-            <div className="ws-style-step">
+            <div key="step-1" className={`ws-style-step ${stepClass}`}>
               <p className="ws-muted">选几篇你最满意的过往文章（支持馆藏稿件、本地 .md / .txt 文件或直接粘贴混合导入）。建议 3–5 篇，1 篇也能开始。</p>
               <div className="ws-style-tip ws-small">
                 <svg className="ws-style-tip-icon" aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -582,7 +586,7 @@ export function WritingStyleWizard() {
           ) : null}
 
           {step === 2 && draftProfile ? (
-            <div className="ws-style-step">
+            <div key="step-2" className={`ws-style-step ${stepClass}`}>
               {meta?.sampleCount ? (
                 <p className="ws-muted ws-small">
                   已实际纳入 {meta.sampleCount} 篇文章生成风格体检卡
@@ -776,7 +780,7 @@ export function WritingStyleWizard() {
           ) : null}
 
           {step === 3 && draftProfile ? (
-            <div className="ws-style-step">
+            <div key="step-3" className={`ws-style-step ${stepClass}`}>
               <div className="ws-style-subcard">
                 <h3>准备启用：{draftProfile.name}</h3>
                 <p className="ws-muted">{draftProfile.summary}</p>

@@ -21,6 +21,7 @@ import { FeedCardPreview } from './feed-preview.jsx'
 import { InsightsView } from './insights.jsx'
 import { InlineDiagramDialog, InlineDiagramPane } from './inline-diagrams.jsx'
 import { MarkdownImportFields } from './markdown-import.jsx'
+import { AnimatedNumber, scrollBehavior, SlidingTabs, useDialogClose, usePresence, usePresenceValue, useSlidingIndicator } from './motion.jsx'
 import { ScheduleView } from './schedule.jsx'
 import { isSvgCardText, SvgCardBlock, SvgCardsPane } from './svg-cards.jsx'
 import { WritingStyleCard, WritingStyleWizard } from './writing-style.jsx'
@@ -281,6 +282,7 @@ function UnsavedParagraphs({ article }) {
   const storageFailed = useStudio(s => s.draftStorageFailed)
   const pending = useStudio(s => s.pending)
   const [open, setOpen] = React.useState(false)
+  const { mounted: menuMounted, closing: menuClosing } = usePresence(open)
   const root = React.useRef(null)
   const stored = draftsFor(article.id)
   const drafts = article.blocks.flatMap((block, index) => stored.has(block.id) ? [{ block, number: index + 1 }] : [])
@@ -301,7 +303,7 @@ function UnsavedParagraphs({ article }) {
       title={storageFailed ? '本地暂存失败，退出前请保存正文' : '未保存修改已在本机暂存'}>
       {drafts.length} 段未保存
     </button>
-    {open ? <div className="ws-unsaved-list" aria-label="未保存段落">
+    {menuMounted ? <div className={`ws-unsaved-list${menuClosing ? ' is-closing' : ''}`} aria-label="未保存段落">
       {drafts.map(({ block, number }) => <button key={block.id} type="button" disabled={Boolean(article.job || pending)} onClick={() => {
         setOpen(false)
         if (getState().view !== 'paper') openArticleView(article, 'paper')
@@ -335,7 +337,8 @@ function CardInsert({ card, onInsert, onClose, onUpload }) {
     return () => URL.revokeObjectURL(url)
   }, [file])
   const label = insertFormats.flatMap(group => group.items).find(([id]) => id === card.id)?.[1]
-  const close = () => { if (!uploading) onClose() }
+  const { closing, requestClose } = useDialogClose(onClose)
+  const close = () => { if (!uploading) requestClose() }
   const chooseFile = next => {
     if (!next) return
     if (next.size > 10 * 1024 * 1024) { setError('本地图片不能超过 10 MB。'); return }
@@ -361,7 +364,7 @@ function CardInsert({ card, onInsert, onClose, onUpload }) {
       setUploading(false)
     }
   }
-  return <dialog ref={ref} className="ws-dialog ws-card-insert" aria-labelledby={heading}
+  return <dialog ref={ref} className={`ws-dialog ws-card-insert${closing ? ' is-closing' : ''}`} aria-labelledby={heading}
     onCancel={e => { e.preventDefault(); close() }} onClick={e => { if (e.target === e.currentTarget) close() }}>
     <form onSubmit={submit}>
       <div className="ws-dialog-head"><h2 id={heading} className="ws-dialog-title">插入{label}</h2>
@@ -421,7 +424,8 @@ function GalleryInsert({ card, onInsert, onClose, onUpload }) {
     for (const url of objectUrls.current) URL.revokeObjectURL(url)
     objectUrls.current.clear()
   }, [])
-  const close = () => { if (!uploading) onClose() }
+  const { closing, requestClose } = useDialogClose(onClose)
+  const close = () => { if (!uploading) requestClose() }
   const parseUrlLines = raw => {
     const lines = String(raw ?? '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
     const added = []
@@ -517,7 +521,7 @@ function GalleryInsert({ card, onInsert, onClose, onUpload }) {
       setUploading(null)
     }
   }
-  return <dialog ref={ref} className="ws-dialog ws-card-insert ws-gallery-insert" aria-labelledby={heading}
+  return <dialog ref={ref} className={`ws-dialog ws-card-insert ws-gallery-insert${closing ? ' is-closing' : ''}`} aria-labelledby={heading}
     onCancel={e => { e.preventDefault(); close() }} onClick={e => { if (e.target === e.currentTarget) close() }}>
     <form onSubmit={submit}>
       <div className="ws-dialog-head"><h2 id={heading} className="ws-dialog-title">{existingGallery ? '编辑横滑图集' : '插入横滑图集'}</h2>
@@ -840,7 +844,7 @@ function PaperTitle({ article, busy }) {
     title="点击编辑标题" onClick={start}>{article.title || '还没有标题'}</button></h1>
 }
 
-function Paper({ article, reviewTarget }) {
+function Paper({ article, reviewTarget, reviewPulse }) {
   const editing = useStudio(s => s.editing)
   const job = article.job
   const pending = useStudio(s => s.pending)
@@ -866,7 +870,7 @@ function Paper({ article, reviewTarget }) {
         const flagged = block.check?.status === 'flag'
         const last = index === article.blocks.length - 1
         return (
-          <div className={`ws-row ${reviewTarget === block.id ? 'is-review-target' : ''}`} id={`ws-review-${article.id}-${block.id}`} key={block.id}>
+          <div className={`ws-row ${reviewTarget === block.id ? 'is-review-target' : ''} ${reviewPulse === block.id ? 'is-review-pulse' : ''}`} id={`ws-review-${article.id}-${block.id}`} key={block.id}>
             <div className={`ws-sheet ${flagged ? 'is-flag' : ''} ${last ? 'is-last' : ''}`}>
               {editing === block.id ? <span className="ws-no" aria-hidden="true">{index + 1}</span> :
                 <button type="button" className="ws-no ws-edge-edit" aria-label={`编辑第 ${index + 1} 段`} disabled={Boolean(job || pending)}
@@ -905,12 +909,12 @@ function BannerBar({ article }) {
   return (
     <div className="ws-bannerbar">
       <span className="ws-pane-title">开头横幅</span>
-      <div className="ws-tabs" role="radiogroup" aria-label="开头横幅风格">
+      <SlidingTabs activeKey={banner.style} className="ws-tabs" role="radiogroup" aria-label="开头横幅风格">
         {banner.choices.map(choice => (
           <button type="button" role="radio" key={choice.id} aria-checked={banner.style === choice.id} className={banner.style === choice.id ? 'is-on' : ''} disabled={Boolean(job)}
             onClick={() => { if (choice.id !== banner.style) act('banner/style', { style: choice.id }) }}>{choice.name}</button>
         ))}
-      </div>
+      </SlidingTabs>
       <span className="ws-bannerbar-status">
         {making ? <span className="ws-shimmer">正在按文章做横幅…</span>
           : failed ? <span className="ws-warn">横幅没做出来</span>
@@ -988,10 +992,10 @@ function LayoutView({ article, brand, mp }) {
   return (
     <div className="ws-layout">
       <div className="ws-layout-modebar">
-        <div className="ws-tabs" role="tablist" aria-label="排版预览模式">
+        <SlidingTabs activeKey={previewMode} className="ws-tabs" role="tablist" aria-label="排版预览模式">
           <button type="button" role="tab" aria-selected={previewMode === 'article'} className={previewMode === 'article' ? 'is-on' : ''} onClick={() => setPreviewMode('article')}>正文预览</button>
           <button type="button" role="tab" aria-selected={previewMode === 'feed'} className={previewMode === 'feed' ? 'is-on' : ''} onClick={() => setPreviewMode('feed')}>信息流卡片</button>
-        </div>
+        </SlidingTabs>
       </div>
       <div className="ws-layout-article" hidden={previewMode !== 'article'}>
         {!enhanced ? <>
@@ -1046,7 +1050,7 @@ function ChatPane({ article }) {
   const [text, setText] = React.useState('')
   const listRef = React.useRef(null)
   const busy = Boolean(article.job)
-  React.useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight }) }, [article.chat.length, busy])
+  React.useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: scrollBehavior() }) }, [article.chat.length, busy])
   const send = async event => {
     event.preventDefault()
     const message = text.trim()
@@ -1085,31 +1089,39 @@ function ChatPane({ article }) {
 const coverStylePreviews = { classic: classicPreview, editorial: editorialPreview, campaign: campaignPreview, kinetic: kineticPreview, grunge: grungePreview, magenta: magentaPreview, felt: feltPreview }
 
 function CoverZoom({ scrim, target, src, maxWidth = 860 }) {
-  if (!scrim || !target || !src) return null
-  const box = scrim.getBoundingClientRect()
-  const anchor = target.getBoundingClientRect()
-  const clamp = (value, lo, hi) => Math.max(lo, Math.min(value, hi))
-  const width = Math.min(maxWidth, box.width - 32)
-  const height = width / 2.35 + 14
-  const left = clamp(anchor.left - box.left + anchor.width / 2 - width / 2, 12, box.width - width - 12)
-  let top = anchor.top - box.top - height - 10
-  if (top < 12) top = anchor.bottom - box.top + 10
-  top = clamp(top, 12, Math.max(12, box.height - height - 12))
-  return <div className="ws-cover-zoom" style={{ left, top, width }} aria-hidden="true"><img src={src} alt="" /></div>
+  const geom = React.useMemo(() => {
+    if (!scrim || !target || !src) return null
+    const box = scrim.getBoundingClientRect()
+    const anchor = target.getBoundingClientRect()
+    const clamp = (value, lo, hi) => Math.max(lo, Math.min(value, hi))
+    const width = Math.min(maxWidth, box.width - 32)
+    const height = width / 2.35 + 14
+    const left = Math.round(clamp(anchor.left - box.left + anchor.width / 2 - width / 2, 12, box.width - width - 12))
+    let top = anchor.top - box.top - height - 10
+    if (top < 12) top = anchor.bottom - box.top + 10
+    top = Math.round(clamp(top, 12, Math.max(12, box.height - height - 12)))
+    return { left, top, width, src }
+  }, [scrim, target, src, maxWidth])
+  const { mounted, closing, value } = usePresenceValue(geom, 140)
+  if (!mounted || !value) return null
+  return <div className={`ws-cover-zoom${closing ? ' is-closing' : ''}`}
+    style={{ width: value.width, transform: `translate3d(${value.left}px, ${value.top}px, 0)` }} aria-hidden="true">
+    <img src={value.src} alt="" />
+  </div>
 }
 
 function CoverOptionGroup({ label, name, options, value, onChange, disabled }) {
   return (
     <fieldset className="ws-cover-option" disabled={disabled}>
       <legend>{label}</legend>
-      <div className="ws-cover-segments">
+      <SlidingTabs activeKey={String(value)} className="ws-cover-segments">
         {options.map(option => (
           <label key={option}>
             <input type="radio" name={name} value={option} checked={value === option} onChange={() => onChange(option)} />
             <span>{String(option).toUpperCase()}</span>
           </label>
         ))}
-      </div>
+      </SlidingTabs>
     </fieldset>
   )
 }
@@ -1153,7 +1165,8 @@ function CoverStyleDialog({ article }) {
     }
   }, [coverStylesState, stylesList, style])
 
-  const close = () => { if (!busy) setState({ dialog: null }) }
+  const { closing, requestClose } = useDialogClose(() => setState({ dialog: null }))
+  const close = () => { if (!busy) requestClose() }
   const submit = async event => {
     event.preventDefault()
     if (busy || !provider) return
@@ -1181,7 +1194,7 @@ function CoverStyleDialog({ article }) {
   }
   const previewSrcOf = item => (item.source === 'custom' ? item.previewUrl : coverStylePreviews[item.id])
   return (
-    <div className="ws-scrim" ref={scrimRef} onMouseDown={event => { if (event.target === event.currentTarget) close() }}>
+    <div className={`ws-scrim${closing ? ' is-closing' : ''}`} ref={scrimRef} onMouseDown={event => { if (event.target === event.currentTarget) close() }}>
       <form className="ws-dialog ws-cover-dialog" role="dialog" aria-modal="true" aria-label="选择封面风格" onSubmit={submit}>
         <div className="ws-dialog-head">
           <h2 className="ws-dialog-title">选择封面风格</h2>
@@ -1302,10 +1315,10 @@ function CoverHistoryDialog({ article }) {
   const dateLabel = value => new Date(value).toLocaleString('zh-CN', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
   })
-  const close = () => setState({ dialog: null })
+  const { closing, requestClose: close } = useDialogClose(() => setState({ dialog: null }))
   const imageUrl = id => `wechat-studio/cover/image?${new URLSearchParams({ id: article.id, asset: id })}`
   return (
-    <div className="ws-scrim" ref={scrimRef} onMouseDown={event => { if (event.target === event.currentTarget) close() }}
+    <div className={`ws-scrim${closing ? ' is-closing' : ''}`} ref={scrimRef} onMouseDown={event => { if (event.target === event.currentTarget) close() }}
       onKeyDown={event => { if (event.key === 'Escape') close() }}>
       <section className="ws-dialog ws-cover-history" role="dialog" aria-modal="true" aria-label="封面生成记录">
         <div className="ws-dialog-head">
@@ -1323,7 +1336,7 @@ function CoverHistoryDialog({ article }) {
                 </button>
               ))}
             </nav>
-            <div className="ws-history-detail" key={run.id}>
+            <div className="ws-history-detail ws-view-enter" key={run.id}>
               <div className="ws-history-heading">
                 <h3>{styleName(run)}</h3>
                 <span className={`ws-history-status is-${run.status}`}>{coverRunStatus[run.status]}</span>
@@ -1594,7 +1607,7 @@ function SidePane({ article, tab, onTab, tabId, flagged, retest, ready, reviewTa
   const pendingCount = flagged + retest + (article.preflight?.counts?.blocking ?? 0)
   return <aside className="ws-side" aria-label="稿面工具">
     <div className="ws-side-tabs">
-      <div className="ws-tabs" role="tablist" aria-label="稿面工具">
+      <SlidingTabs activeKey={tab} className="ws-tabs" role="tablist" aria-label="稿面工具">
         {SIDE_TABS.map(([id, label], index) => <button key={id} type="button" role="tab" id={tabId + '-' + id}
           aria-controls={tabId + '-panel-' + id} aria-selected={tab === id} tabIndex={tab === id ? 0 : -1}
           className={tab === id ? 'is-on' : ''} onClick={() => onTab(id)} onKeyDown={event => {
@@ -1608,7 +1621,7 @@ function SidePane({ article, tab, onTab, tabId, flagged, retest, ready, reviewTa
           }}>
           {label}{id === 'quality' && pendingCount ? <span className="ws-side-count">{pendingCount}</span> : null}
         </button>)}
-      </div>
+      </SlidingTabs>
     </div>
     {SIDE_TABS.map(([id]) => <div key={id} role="tabpanel" id={tabId + '-panel-' + id}
       aria-labelledby={tabId + '-' + id} className={`ws-side-content ${id === 'images' ? 'ws-images-panel' : ''}`} hidden={tab !== id} tabIndex={0}>
@@ -1627,6 +1640,7 @@ const draftDate = new Intl.DateTimeFormat('zh-CN', {
 
 function Switcher({ data }) {
   const [open, setOpen] = React.useState(false)
+  const { mounted: menuMounted, closing: menuClosing } = usePresence(open)
   const [query, setQuery] = React.useState('')
   const root = React.useRef(null)
   const trigger = React.useRef(null)
@@ -1665,8 +1679,8 @@ function Switcher({ data }) {
         onClick={() => open ? close() : setOpen(true)}>
         <span>{current?.title || current?.topic || '未命名文章'}</span><Icon name="down" size={14} />
       </button>
-      {open ? (
-        <div className="ws-menu ws-draft-picker" id={panelId} role="region" aria-label="查找文章">
+      {menuMounted ? (
+        <div className={`ws-menu ws-draft-picker${menuClosing ? ' is-closing' : ''}`} id={panelId} role="region" aria-label="查找文章">
           <div className="ws-draft-search">
             <input autoFocus type="search" aria-label="搜索文章标题" placeholder="搜索文章标题…" value={query}
               onChange={event => setQuery(event.target.value)} onKeyDown={event => {
@@ -1727,7 +1741,8 @@ export function NewDialog() {
   const readingRef = React.useRef(false)
   const handleReadingChange = value => { readingRef.current = value; setReading(value) }
   const locked = busy || reading
-  const close = () => { if (!locked) setState({ dialog: null, newDialogDraft: null }) }
+  const { closing, requestClose } = useDialogClose(() => setState({ dialog: null, newDialogDraft: null }))
+  const close = () => { if (!locked) requestClose() }
   const openStyleFromNew = () => {
     setState({ newDialogDraft: { tab, topic, material, markdown } })
     openStyleWizard(1, { returnTo: 'new' })
@@ -1741,13 +1756,13 @@ export function NewDialog() {
     if (ok) setState({ dialog: null, newDialogDraft: null, module: 'paper', paperHome: false, view: 'paper', editing: null })
   }
   return (
-    <div className="ws-scrim" onMouseDown={e => { if (e.target === e.currentTarget) close() }}>
+    <div className={`ws-scrim${closing ? ' is-closing' : ''}`} onMouseDown={e => { if (e.target === e.currentTarget) close() }}>
       <form className={`ws-dialog ${tab === 'paste' ? 'ws-import-dialog' : ''}`} role="dialog" aria-modal="true" aria-label="新建文章" onSubmit={submit}>
         <div className="ws-dialog-head">
-          <div className="ws-tabs" role="tablist">
+          <SlidingTabs activeKey={tab} className="ws-tabs" role="tablist">
             <button type="button" role="tab" disabled={locked} aria-selected={tab === 'paste'} className={tab === 'paste' ? 'is-on' : ''} onClick={() => setTab('paste')}>贴入已有文章</button>
             <button type="button" role="tab" disabled={locked} aria-selected={tab === 'write'} className={tab === 'write' ? 'is-on' : ''} onClick={() => setTab('write')}>从选题写</button>
-          </div>
+          </SlidingTabs>
           <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={close}><Icon name="close" /></button>
         </div>
         {tab === 'paste' ? (
@@ -1795,9 +1810,10 @@ function ReimportDialog({ article }) {
   const locked = Boolean(busy || reading || taskReason)
   const incomingTitle = React.useMemo(() => markdown.trim() ? splitMarkdown(markdown).title : '', [markdown])
   React.useEffect(() => () => { sequence.current++ }, [])
+  const { closing, requestClose } = useDialogClose(() => setState({ dialog: null, reimportArticleId: null }))
   const close = () => {
     if (busy) return
-    setState({ dialog: null, reimportArticleId: null })
+    requestClose()
   }
   const invalidate = () => {
     sequence.current++
@@ -1883,7 +1899,7 @@ function ReimportDialog({ article }) {
     }
   }
   return (
-    <div className="ws-scrim" onMouseDown={event => { if (event.target === event.currentTarget) close() }}>
+    <div className={`ws-scrim${closing ? ' is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) close() }}>
       <form className="ws-dialog ws-import-dialog ws-reimport-dialog" role="dialog" aria-modal="true" aria-label="重新导入 Markdown" onSubmit={submit}>
         <div className="ws-dialog-head">
           <div>
@@ -1907,9 +1923,9 @@ function ReimportDialog({ article }) {
           <section className="ws-reimport-impact" aria-label="覆盖影响">
             <h3>覆盖影响</h3>
             <dl className="ws-import-metrics ws-reimport-metrics">
-              <div><dt>保留</dt><dd>{plan.kept} 块</dd></div>
-              <div><dt>移出</dt><dd>{plan.removed} 块</dd></div>
-              <div><dt>新增</dt><dd>{plan.added} 块</dd></div>
+              <div><dt>保留</dt><dd><AnimatedNumber value={plan.kept} /> 块</dd></div>
+              <div><dt>移出</dt><dd><AnimatedNumber value={plan.removed} /> 块</dd></div>
+              <div><dt>新增</dt><dd><AnimatedNumber value={plan.added} /> 块</dd></div>
             </dl>
             <p className="ws-muted ws-small">没有可安全复用 ID 的内容按移出＋新增计算。旧摘要、标题候选和朱雀检查结果会在正文变化后清空。</p>
             {plan.transfers ? <p className="ws-import-transfer"><Icon name="upload" />{plan.transfers} 张飞书图片将在覆盖后后台转存</p> : null}
@@ -1954,7 +1970,7 @@ function ModelDialog() {
   React.useEffect(() => {
     loadModels().then(setList).catch(err => setList({ providers: [], default: null, current: null, error: err.message }))
   }, [])
-  const close = () => setState({ dialog: null })
+  const { closing, requestClose: close } = useDialogClose(() => setState({ dialog: null }))
   const pick = async (provider, model) => {
     setBusy(true)
     const ok = await saveSettings({ model: { provider, model } })
@@ -1964,7 +1980,7 @@ function ModelDialog() {
   const current = list?.current
   const isOn = (provider, model) => current?.provider === provider && current?.model === model
   return (
-    <div className="ws-scrim" onMouseDown={e => { if (e.target === e.currentTarget) close() }}>
+    <div className={`ws-scrim${closing ? ' is-closing' : ''}`} onMouseDown={e => { if (e.target === e.currentTarget) close() }}>
       <div className="ws-dialog" role="dialog" aria-modal="true" aria-label="模型">
         <div className="ws-dialog-head">
           <h2 className="ws-dialog-title">模型</h2>
@@ -2023,8 +2039,9 @@ function SettingsDialog({ onOpenPlugin }) {
   const [mpTest, setMpTest] = React.useState(null)
   const [busy, setBusy] = React.useState(false)
   React.useEffect(() => { loadSettings() }, [])
-  const close = () => setState({ dialog: null, settingsPage: null })
-  if (!settings) return <div className="ws-scrim"><div className="ws-dialog"><span className="ws-shimmer">正在读取设置…</span></div></div>
+  const { closing, requestClose: close } = useDialogClose(() => setState({ dialog: null, settingsPage: null }))
+  const { containerRef: navRef, hasThumb: navHasThumb, thumbProps: navThumb } = useSlidingIndicator(settings ? page : '', { selector: 'button[aria-current="page"]' })
+  if (!settings) return <div className={`ws-scrim${closing ? ' is-closing' : ''}`}><div className="ws-dialog"><span className="ws-shimmer">正在读取设置…</span></div></div>
   const providerValue = coverProvider ?? settings.coverProvider
   const pMeta = providerMeta(providerValue)
   const portraitConfigured = Boolean((portraitUrl ?? settings.portraitUrl ?? '').trim())
@@ -2086,7 +2103,7 @@ function SettingsDialog({ onOpenPlugin }) {
     if (await saveSettings({ zhuqueKey: '' })) { setKey(''); setTest(null) }
   }
   return (
-    <div className="ws-scrim" onMouseDown={e => { if (e.target === e.currentTarget) close() }}>
+    <div className={`ws-scrim${closing ? ' is-closing' : ''}`} onMouseDown={e => { if (e.target === e.currentTarget) close() }}>
       <form className="ws-dialog ws-settings-dialog" role="dialog" aria-modal="true" aria-label="设置" onSubmit={submit}>
         <div className="ws-dialog-head">
           <h2 className="ws-dialog-title">设置</h2>
@@ -2094,7 +2111,8 @@ function SettingsDialog({ onOpenPlugin }) {
         </div>
 
         <div className="ws-settings-body">
-          <nav className="ws-settings-nav" aria-label="设置分类">
+          <nav ref={navRef} className={`ws-settings-nav ws-seg-host${navHasThumb ? ' has-thumb' : ''}`} aria-label="设置分类">
+            <span {...navThumb} className={`${navThumb.className} ws-settings-thumb`} />
             {pages.map((item, index) => (
               <React.Fragment key={item.id}>
                 {index === 0 || pages[index - 1].group !== item.group
@@ -2111,12 +2129,14 @@ function SettingsDialog({ onOpenPlugin }) {
             </div> : null}
           </nav>
           <div className="ws-settings-content">
-            <div className="ws-settings-section-head">
-              <h3>{selected.title}</h3>
-              {selected.ready !== undefined ? <span className={`ws-settings-status ${selected.ready ? 'ws-ok' : 'ws-muted'}`}>{selected.readyLabel ?? (selected.ready ? '已配置' : '未配置')}</span> : null}
+            <div key={page} className="ws-view-enter">
+              <div className="ws-settings-section-head">
+                <h3>{selected.title}</h3>
+                {selected.ready !== undefined ? <span className={`ws-settings-status ${selected.ready ? 'ws-ok' : 'ws-muted'}`}>{selected.readyLabel ?? (selected.ready ? '已配置' : '未配置')}</span> : null}
+              </div>
+              <p className="ws-settings-description ws-muted">{selected.description}</p>
+              {selected.link ? <a className="ws-link ws-settings-provider" href={selected.link} target="_blank" rel="noreferrer">{selected.linkLabel} ↗</a> : null}
             </div>
-            <p className="ws-settings-description ws-muted">{selected.description}</p>
-            {selected.link ? <a className="ws-link ws-settings-provider" href={selected.link} target="_blank" rel="noreferrer">{selected.linkLabel} ↗</a> : null}
 
             <fieldset className="ws-group ws-settings-fields" hidden={page !== 'brand'}>
               <label className="ws-field"><span>账号名称</span>
@@ -2350,8 +2370,10 @@ const SKILL_INFO = {
 
 function Rail({ module }) {
   const update = useStudio(s => s.update)
+  const { containerRef, hasThumb, thumbProps } = useSlidingIndicator(module, { selector: 'button.is-on' })
   return (
-    <nav className="ws-rail" aria-label="模块">
+    <nav ref={containerRef} className={`ws-rail ws-seg-host${hasThumb ? ' has-thumb' : ''}`} aria-label="模块">
+      <span {...thumbProps} className={`${thumbProps.className} ws-rail-thumb`} />
       {MODULES.filter(item => item.id !== 'materials').map(item => (
         <button type="button" key={item.id} className={module === item.id ? 'is-on' : ''} aria-current={module === item.id ? 'page' : undefined} onClick={() => setState({ module: item.id, ...(item.id === 'paper' ? { paperHome: true } : {}) })}>
           <Icon name={item.icon} size={20} />
@@ -2429,7 +2451,7 @@ function RevisionDialog({ article, blockId }) {
   const [result, setResult] = React.useState(null)
   const [selected, setSelected] = React.useState(null)
   const headingId = React.useId()
-  const close = () => setState({ dialog: null })
+  const { closing, requestClose: close } = useDialogClose(() => setState({ dialog: null }))
   React.useEffect(() => {
     const dialog = modal.current
     dialog.showModal()
@@ -2458,7 +2480,7 @@ function RevisionDialog({ article, blockId }) {
     </div>
   )
   return (
-    <dialog ref={modal} className="ws-dialog ws-revision-dialog" aria-labelledby={headingId}
+    <dialog ref={modal} className={`ws-dialog ws-revision-dialog${closing ? ' is-closing' : ''}`} aria-labelledby={headingId}
       onCancel={event => { event.preventDefault(); close() }}
       onClick={event => { if (event.target === event.currentTarget) close() }}>
       <div className="ws-dialog-head">
@@ -2509,9 +2531,12 @@ function PaperModule({ data }) {
   const deriveDrafts = useStudio(s => s.deriveDrafts)
   useStudio(s => s.draftVersion)
   const [review, setReview] = React.useState(null)
+  const [reviewPulse, setReviewPulse] = React.useState(null)
+  const pulseTimer = React.useRef(null)
   const [side, setSide] = React.useState(null)
   const sideTabId = React.useId()
   const article = data.current
+  React.useEffect(() => () => clearTimeout(pulseTimer.current), [])
   if (!article) return <Empty model={data.model} />
   const sideTab = side?.articleId === article.id ? side.tab : 'article'
   const selectSideTab = tab => setSide({ articleId: article.id, tab })
@@ -2523,9 +2548,15 @@ function PaperModule({ data }) {
   const reviewTarget = review?.articleId === article.id ? review.blockId : null
   const jumpToReview = (blockId, focus = false) => {
     setReview({ articleId: article.id, blockId })
+    clearTimeout(pulseTimer.current)
+    setReviewPulse(null)
+    requestAnimationFrame(() => {
+      setReviewPulse(blockId)
+      pulseTimer.current = setTimeout(() => setReviewPulse(null), 950)
+    })
     const row = document.getElementById(`ws-review-${article.id}-${blockId}`)
     if (focus) row?.querySelector('.ws-block, .ws-edit')?.focus({ preventScroll: true })
-    row?.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+    row?.scrollIntoView({ block: 'center', behavior: scrollBehavior() })
   }
   const flagged = article.blocks.filter(b => b.check?.status === 'flag').length
   const retest = article.blocks.filter(b => b.check?.status === 'fixed').length
@@ -2537,11 +2568,11 @@ function PaperModule({ data }) {
         {view === 'paper' && article.blocks.length ? <PaperNavigation key={`navigation:${article.id}`} article={article} target={reviewTarget} onJump={jumpToReview} /> : null}
         <UnsavedParagraphs key={`unsaved:${article.id}`} article={article} />
         <span className="ws-grow" />
-        <div className="ws-tabs" role="tablist" aria-label="视图">
+        <SlidingTabs activeKey={view} className="ws-tabs" role="tablist" aria-label="视图">
           <button type="button" role="tab" aria-selected={view === 'paper'} className={view === 'paper' ? 'is-on' : ''} onClick={() => openArticleView(article, 'paper')}>稿面</button>
           <button type="button" role="tab" aria-selected={view === 'layout'} className={view === 'layout' ? 'is-on' : ''} onClick={() => openArticleView(article, 'layout')}>排版预览</button>
           <button type="button" role="tab" aria-selected={view === 'derive'} className={view === 'derive' ? 'is-on' : ''} onClick={() => setState({ view: 'derive', editing: null })}>一稿多发{hasUnsavedDeriveDrafts(article.id, deriveDrafts) ? <i className="ws-derive-tab-dot" aria-label="有未保存修改" /> : null}</button>
-        </div>
+        </SlidingTabs>
         {article.canUndo ? <button type="button" className="ws-btn" disabled={Boolean(article.job)} onClick={() => setState({ dialog: 'revisions' })}>改稿对比</button> : null}
         {article.canUndo ? <button type="button" className="ws-icon-btn" aria-label="撤销上一步" title="撤销上一步" disabled={Boolean(article.job)} onClick={() => act('undo')}><Icon name="undo" /></button> : null}
         <button type="button" className="ws-icon-btn" aria-label={chatOpen ? '收起改稿对话' : '打开改稿对话'} aria-pressed={chatOpen} onClick={() => setState({ chatOpen: !chatOpen })}><Icon name="chat" /></button>
@@ -2572,9 +2603,17 @@ function PaperModule({ data }) {
           <button type="button" className="ws-icon-btn" aria-label="关闭提示" onClick={() => act('notice/clear', {}, { quiet: true })}><Icon name="close" size={14} /></button>
         </div>
       ) : null}
-      <div className={`ws-body ${chatOpen && view === 'paper' ? '' : 'no-chat'}`}>
-        {chatOpen && view === 'paper' ? <ChatPane article={article} /> : null}
-        <main className="ws-main">{view === 'layout' ? <LayoutView article={article} brand={data.brand} mp={data.mp} /> : view === 'derive' ? <DeriveView article={article} brand={data.brand} /> : <Paper article={article} reviewTarget={reviewTarget} />}</main>
+      <div className={`ws-body ${view !== 'paper' ? 'no-chat' : !chatOpen ? 'is-chat-collapsed' : ''}`}>
+        {view === 'paper' ? (
+          <div className="ws-chat-shell" aria-hidden={!chatOpen || undefined} inert={!chatOpen ? '' : undefined}>
+            <ChatPane article={article} />
+          </div>
+        ) : null}
+        <main className="ws-main">
+          {view === 'layout' ? <LayoutView article={article} brand={data.brand} mp={data.mp} />
+            : view === 'derive' ? <DeriveView article={article} brand={data.brand} />
+              : <Paper article={article} reviewTarget={reviewTarget} reviewPulse={reviewPulse} />}
+        </main>
         {view === 'paper' ? <SidePane key={article.id} article={article} tab={sideTab} onTab={selectSideTab} tabId={sideTabId} flagged={flagged} retest={retest} ready={data.zhuqueReady} reviewTarget={reviewTarget} onReviewJump={jumpToReview} cloudinaryReady={data.cloudinaryReady} unsavedCount={unsavedParagraphCount(article)} /> : null}
       </div>
     </>
@@ -2705,7 +2744,7 @@ function DraftHome({ data }) {
             <div className="ws-dh-title-row">
               <h1>稿面</h1>
               <p className="ws-dh-dateline">
-                <b>VOL.{String(stats.activeCount).padStart(2, '0')}</b>
+                <b>VOL.<AnimatedNumber value={stats.activeCount} format={v => String(Math.round(v)).padStart(2, '0')} /></b>
                 <span aria-hidden="true">/</span>
                 <span>{formatMastheadDateline()}</span>
               </p>
@@ -2766,19 +2805,19 @@ function DraftHome({ data }) {
               </div>
               <div className="ws-dh-kpi-grid">
                 <button type="button" className="ws-dh-kpi" onClick={() => setFilter('all')}>
-                  <b>{stats.activeCount}</b>
+                  <b><AnimatedNumber value={stats.activeCount} /></b>
                   <span>在写稿件</span>
                 </button>
                 <button type="button" className="ws-dh-kpi is-ok" onClick={() => setFilter('ready')}>
-                  <b>{stats.readyCount}</b>
+                  <b><AnimatedNumber value={stats.readyCount} /></b>
                   <span>已就绪可发</span>
                 </button>
                 <button type="button" className="ws-dh-kpi is-warn" onClick={() => setFilter('review')}>
-                  <b>{stats.reviewCount}</b>
+                  <b><AnimatedNumber value={stats.reviewCount} /></b>
                   <span>待处理质检</span>
                 </button>
                 <button type="button" className="ws-dh-kpi is-accent" onClick={() => setState({ module: 'schedule' })}>
-                  <b>{stats.scheduledCount}</b>
+                  <b><AnimatedNumber value={stats.scheduledCount} /></b>
                   <span>已排期</span>
                 </button>
               </div>
@@ -2813,20 +2852,20 @@ function DraftHome({ data }) {
 
         <section className="ws-draft-shelf" aria-label={DRAFT_HOME_TABS.find(([id]) => id === filter)?.[1] ?? '全部稿件'}>
           <div className="ws-dh-shelf-head">
-            <div className="ws-dh-tabs" role="tablist" aria-label="稿件分类">
+            <SlidingTabs activeKey={filter} mode="underline" underlineOffset={9} thumbClassName="ws-dh-tab-ink" className="ws-dh-tabs" role="tablist" aria-label="稿件分类">
               {DRAFT_HOME_TABS.map(([id, label]) => (
                 <button key={id} type="button" role="tab" aria-selected={filter === id} className={`ws-dh-tab ${filter === id ? 'is-on' : ''}`}
                   onClick={() => setFilter(id)}>
                   {label}<span>{filterCounts[id]}</span>
                 </button>
               ))}
-            </div>
+            </SlidingTabs>
             <span className="ws-muted ws-small">
               {hasQuery ? `找到 ${matches.length} 篇` : showArchived ? '按归档时间排序' : '按最近编辑排序 · 悬浮卡片可复制或归档'}
             </span>
           </div>
           {matches.length ? (
-            <div className="ws-draft-grid">
+            <div key={filter} className="ws-draft-grid ws-view-enter">
               {matches.map(draft => (
                 <article className="ws-draft-card" key={draft.id}>
                   <div className="ws-draft-card-actions">
@@ -2868,6 +2907,7 @@ export function Studio({ onOpenPlugin }) {
   const reimportArticleId = useStudio(s => s.reimportArticleId)
   const paperSession = useStudio(s => s.paperSession)
   const note = useStudio(s => s.toast)
+  const { mounted: toastMounted, closing: toastClosing, value: toastItem } = usePresenceValue(note)
   const item = MODULES.find(m => m.id === module) ?? MODULES[1]
   React.useEffect(() => { loadVersion() }, [])
   React.useEffect(() => {
@@ -2876,8 +2916,12 @@ export function Studio({ onOpenPlugin }) {
     }
   }, [dialog, data?.current?.id, reimportArticleId])
   let content
-  if (!data) content = <div className="ws-center">{error ? <p className="ws-muted">加载失败：{error}</p> : <span className="ws-shimmer">正在打开稿面…</span>}</div>
-  else if (item.id === 'paper') content = paperHome ? <DraftHome data={data} /> : <PaperModule key={`${data.current?.id ?? 'empty'}:${paperSession ?? 0}`} data={data} />
+  let surfaceKey = item.id
+  if (!data) { content = <div className="ws-center">{error ? <p className="ws-muted">加载失败：{error}</p> : <span className="ws-shimmer">正在打开稿面…</span>}</div>; surfaceKey = 'loading' }
+  else if (item.id === 'paper') {
+    content = paperHome ? <DraftHome data={data} /> : <PaperModule key={`${data.current?.id ?? 'empty'}:${paperSession ?? 0}`} data={data} />
+    surfaceKey = paperHome ? 'paper-home' : `paper-doc:${data.current?.id ?? 'empty'}`
+  }
   else if (item.id === 'insights') content = <InsightsView />
   else if (item.id === 'schedule') content = <ScheduleView data={data} />
   else if (item.id === 'skills') content = <SkillsView />
@@ -2885,7 +2929,7 @@ export function Studio({ onOpenPlugin }) {
   return (
     <>
       <Rail module={item.id} />
-      <div className="ws-col">{content}</div>
+      <div className="ws-col ws-view-enter" key={surfaceKey}>{content}</div>
       {dialog === 'revisions' && data?.current ? <RevisionDialog key={data.current.id} article={data.current} /> : null}
       {dialog === 'block-revision' && data?.current ? <RevisionDialog key={revisionBlockId} article={data.current} blockId={revisionBlockId} /> : null}
       {dialog === 'cover-history' && data?.current ? <CoverHistoryDialog key={data.current.id} article={data.current} /> : null}
@@ -2897,7 +2941,11 @@ export function Studio({ onOpenPlugin }) {
       {customCoverWizard?.open ? <CustomCoverStyleWizard /> : null}
       {dialog === 'settings' ? <SettingsDialog onOpenPlugin={onOpenPlugin} /> : null}
       {dialog === 'model' ? <ModelDialog /> : null}
-      {note ? <div className={`ws-toast ${note.error ? 'is-error' : ''}`} role="status">{note.text}</div> : null}
+      {toastMounted && toastItem ? (
+        <div key={toastItem.at} className={`ws-toast ${toastItem.error ? 'is-error' : ''}${toastClosing ? ' is-closing' : ''}`} role="status">
+          {toastItem.text}
+        </div>
+      ) : null}
     </>
   )
 }

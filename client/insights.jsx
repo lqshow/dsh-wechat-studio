@@ -4,6 +4,7 @@ import React from 'react'
 import { articleWindow, compareArticle, diagnoseArticle, reviewHighlights } from './article-score.js'
 import { HOOKS, HOOK_IDS } from '../src/article.js'
 import { applyInsightRule, closeInsightRule, importInsights, loadInsights, matchInsight, matchInsightDetail, previewInsightRule, saveInsightExperiment, setInsightDetailTopic, setInsightHook, useStudio } from './state.js'
+import { AnimatedNumber, SlidingTabs, useDialogClose } from './motion.jsx'
 
 const ICONS = {
   upload: 'M8 11V3M4.5 6.5L8 3l3.5 3.5M3 13h10',
@@ -51,14 +52,14 @@ function ArticleBars({ rows }) {
   const topChannel = active && Object.entries(active.channels ?? {}).sort((a, b) => b[1] - a[1])[0]
   return (
     <div className="ws-ins-trend-interactive" onPointerLeave={() => setActiveKey(null)}>
-    <svg viewBox={`0 0 ${PLOT.w} ${PLOT.h}`} className="ws-ins-svg" role="img" aria-label="每篇文章的阅读柱状图">
+    <svg viewBox={`0 0 ${PLOT.w} ${PLOT.h}`} className={`ws-ins-svg${active ? ' has-active' : ''}`} role="img" aria-label="每篇文章的阅读柱状图">
       <Grid max={max} />
       {rows.map((r, i) => {
         const x = PLOT.l + step * (i + 0.5)
         const y = yOf(r.reads, max)
         return <g key={r.key}>
           <rect x={x - barW / 2} y={y} width={barW} height={PLOT.t + plotH - y} rx="2"
-            className={`ws-ins-bar${r.matched ? '' : ' is-unmatched'}`} />
+            className={`ws-ins-bar${r.matched ? '' : ' is-unmatched'}${r.key === activeKey ? ' is-active' : ''}`} />
           {i % labelEvery === 0 ? <text x={x} y={PLOT.h - 8} textAnchor="middle" className="ws-ins-axis">{shortDate(r.publishedAt)}</text> : null}
           <rect x={x - step / 2} y={PLOT.t} width={step} height={plotH} fill="transparent"
             onPointerEnter={() => setActiveKey(r.key)} onClick={() => setActiveKey(r.key)} />
@@ -338,26 +339,27 @@ function RulesPanel({ rules, insufficient, minSample, onPreview, pending }) {
 function RuleDialog({ preview, pending }) {
   const modal = React.useRef(null)
   const headingId = React.useId()
+  const { closing, requestClose } = useDialogClose(closeInsightRule)
   React.useEffect(() => {
     const dialog = modal.current
     dialog.showModal()
     return () => { if (dialog.open) dialog.close() }
   }, [])
   return (
-    <dialog ref={modal} className="ws-dialog ws-ins-rule-dialog" aria-labelledby={headingId}
-      onCancel={e => { e.preventDefault(); closeInsightRule() }}
-      onClick={e => { if (e.target === e.currentTarget) closeInsightRule() }}>
+    <dialog ref={modal} className={`ws-dialog ws-ins-rule-dialog${closing ? ' is-closing' : ''}`} aria-labelledby={headingId}
+      onCancel={e => { e.preventDefault(); requestClose() }}
+      onClick={e => { if (e.target === e.currentTarget) requestClose() }}>
       <div className="ws-dialog-head">
         <div>
           <h2 id={headingId} className="ws-dialog-title">写进 {preview.skill}.md</h2>
           <p className="ws-muted ws-small">{preview.isCopy ? '会在覆盖目录新建一份副本，内置 skill 不动。' : '会改你覆盖目录里的这份 skill。'}{preview.replaces ? '替换已有的「数据复盘规则」一节。' : '在末尾新增「数据复盘规则」一节。'}</p>
         </div>
-        <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={closeInsightRule}><Icon name="close" /></button>
+        <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={requestClose}><Icon name="close" /></button>
       </div>
       <code className="ws-ins-rule-path">{preview.path}</code>
       <pre className="ws-ins-rule-pre">{preview.section}</pre>
       <div className="ws-dialog-foot">
-        <button type="button" className="ws-btn" onClick={closeInsightRule}>取消</button>
+        <button type="button" className="ws-btn" onClick={requestClose}>取消</button>
         <button type="button" className="ws-btn is-primary" disabled={pending === 'insights/rule-apply'} onClick={() => applyInsightRule(preview.ruleId)}>
           {pending === 'insights/rule-apply' ? '写入中…' : '确认写入'}
         </button>
@@ -502,10 +504,10 @@ function Scorecard({ detail, details, drafts, experiments, pending, initialPeer,
       <button type="submit" className="ws-btn" disabled={Boolean(pending) || topic.trim() === (detail.topic ?? '')}>保存题材</button>
     </form>
     <p className="ws-muted ws-small">给同类文章填同一个题材。首日按发表当天计算，7 天含发表当天。阅读日累计可能重复计入跨天读者。</p>
-    <div className="ws-tabs" role="group" aria-label="发表后观察窗">
+    <SlidingTabs activeKey={days} className="ws-tabs" role="group" aria-label="发表后观察窗">
       {[[1, '发表首日'], [7, '发表后 7 天']].map(([value, label]) =>
         <button type="button" key={value} aria-pressed={days === value} className={days === value ? 'is-on' : ''} onClick={() => setDays(value)}>{label}</button>)}
-    </div>
+    </SlidingTabs>
     {!current ? <p className="ws-muted">{detail.publishedAt ? '这份明细缺少观察窗内完整的「全部」渠道阅读数据。' : '请先关联趋势卡片，获取发表日期。'}</p> : <>
       <table>
         <thead><tr><th scope="col">指标</th><th scope="col">本篇</th><th scope="col">同类中位数</th></tr></thead>
@@ -599,19 +601,20 @@ function DetailDialog({ detail, details, drafts, experiments, targets, pending, 
   const audience = detail.audience[audienceIndex]
   const channels = [...new Set(detail.daily.map(row => row.channel))]
   const selected = channel ?? (channels.includes('全部') ? '全部' : channels[0])
+  const { closing, requestClose } = useDialogClose(onClose)
   React.useEffect(() => {
     const dialog = modal.current
     dialog.showModal()
-    return () => dialog.close()
+    return () => { if (dialog.open) dialog.close() }
   }, [])
   const metrics = items => <dl className="ws-ins-detail-metrics">{items.map(({ label, value }) =>
     <div key={label}><dt>{label}</dt><dd>{label === '完读率' ? (value * 100).toFixed(2) + '%' : fmt(value)}</dd></div>)}</dl>
-  return <dialog ref={modal} className="ws-dialog ws-ins-rule-dialog ws-ins-detail" aria-labelledby={heading}
-    onCancel={event => { event.preventDefault(); onClose() }}
-    onClick={event => { if (event.target === event.currentTarget) onClose() }}>
+  return <dialog ref={modal} className={`ws-dialog ws-ins-rule-dialog ws-ins-detail${closing ? ' is-closing' : ''}`} aria-labelledby={heading}
+    onCancel={event => { event.preventDefault(); requestClose() }}
+    onClick={event => { if (event.target === event.currentTarget) requestClose() }}>
     <div className="ws-dialog-head">
       <h2 className="ws-dialog-title" id={heading}>{detail.title}</h2>
-      <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={onClose}><Icon name="close" /></button>
+      <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={requestClose}><Icon name="close" /></button>
     </div>
     <div className="ws-ins-detail-meta">
       <span className="ws-muted ws-small" title={detail.fileName}>{detail.window ? `趋势日期 ${detail.window.from} 至 ${detail.window.to}` : '单篇明细'}</span>
@@ -624,10 +627,10 @@ function DetailDialog({ detail, details, drafts, experiments, targets, pending, 
       <option value="">单独查看</option>
       {targets.map(row => <option value={row.key} key={row.key}>{row.publishedAt} · {row.title}</option>)}
     </select></label> : null}
-    <div className="ws-tabs ws-ins-detail-tabs" role="group" aria-label="明细栏目">
+    <SlidingTabs activeKey={section} className="ws-tabs ws-ins-detail-tabs" role="group" aria-label="明细栏目">
       {sections.map(([id, label]) => <button type="button" key={id} className={section === id ? 'is-on' : ''} aria-pressed={section === id} onClick={() => setSection(id)}>{label}</button>)}
-    </div>
-    <div className="ws-ins-detail-body" key={section}>
+    </SlidingTabs>
+    <div className="ws-ins-detail-body ws-view-enter" key={section}>
     {section === 'overview' ? metrics(detail.metrics) : null}
     {section === 'diagnosis' ? <ArticleDiagnosis detail={detail} /> : null}
     {section === 'score' ? <Scorecard detail={detail} details={details} drafts={drafts} experiments={experiments} pending={pending} initialPeer={initialPeer} initialExperiment={initialExperiment} /> : null}
@@ -744,7 +747,7 @@ export function InsightsView() {
 
       <div className="ws-ins-cards">
         {numCards.map(([label, value, note]) => (
-          <div className="ws-ins-num" key={label}><span>{label}</span><b>{fmt(value)}</b><small>{note}</small></div>
+          <div className="ws-ins-num" key={label}><span>{label}</span><b><AnimatedNumber value={Number(value)} format={fmt} /></b><small>{note}</small></div>
         ))}
       </div>
       {tendency ? <section className="ws-ins-block">
@@ -766,9 +769,9 @@ export function InsightsView() {
       {tendency ? <>
       <div className="ws-ins-block-head">
         <h3>文章发表范围</h3>
-        <div className="ws-tabs" role="group" aria-label="文章发表范围">
+        <SlidingTabs activeKey={range} className="ws-tabs" role="group" aria-label="文章发表范围">
           {RANGES.map(([id, label]) => <button type="button" key={id} className={range === id ? 'is-on' : ''} aria-pressed={range === id} onClick={() => { setFilter(null); loadInsights(id) }}>{label}</button>)}
-        </div>
+        </SlidingTabs>
       </div>
       <p className="ws-muted ws-small">{range === 'all' ? '趋势表内全部文章' : `${insights.articleRange.from} 至 ${insights.articleRange.to} 发表`} · 阅读统计 {tendency.window.from} 至 {tendency.window.to}</p>
       <section className="ws-ins-block">
@@ -795,10 +798,10 @@ export function InsightsView() {
           <h3>文章 <small>{rows.length}</small></h3>
           <div className="ws-ins-articles-tools">
             {filterGroup ? <button type="button" className="ws-ins-filter-chip" onClick={() => setFilter(null)}>{filterGroup.name} ✕</button> : null}
-            <div className="ws-tabs" role="group" aria-label="排序">
+            <SlidingTabs activeKey={sort} className="ws-tabs" role="group" aria-label="排序">
               <button type="button" className={sort === 'reads' ? 'is-on' : ''} aria-pressed={sort === 'reads'} onClick={() => setSort('reads')}>按阅读</button>
               <button type="button" className={sort === 'date' ? 'is-on' : ''} aria-pressed={sort === 'date'} onClick={() => setSort('date')}>按日期</button>
-            </div>
+            </SlidingTabs>
           </div>
         </div>
         {rows.length ? (
