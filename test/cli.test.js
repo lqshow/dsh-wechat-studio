@@ -111,7 +111,7 @@ test('createStandaloneCtx 支持 SSE 分片流式响应并与 callModel 兼容',
     return sseResponse([
       'data: {"choices":[{"delta":{"content":"你"}}]}\n\n',
       'data: {"choices":[{"delta":{"content":"好，"}}]}\n',
-      '\ndata: {"choices":[{"delta":{"content":"公众号"}}]}\n\ndata: [DONE]\n\n',
+      '\ndata: {"choices":[{"delta":{"content":"公众号"}}]}\n\ndata: {"choices":[{"finish_reason":"length"}]}\n\ndata: [DONE]\n\n',
     ])
   }
   const ctx = createStandaloneCtx({
@@ -121,15 +121,18 @@ test('createStandaloneCtx 支持 SSE 分片流式响应并与 callModel 兼容',
     fetchImpl,
   })
   const deltas = []
+  let finishKind
   const text = await callModel(ctx, {
     system: '系统指令',
     user: '用户输入',
     task: 'cli-test',
     maxTokens: 1200,
     onText: delta => deltas.push(delta),
+    onFinish: kind => { finishKind = kind },
   })
   assert.equal(text, '你好，公众号')
   assert.deepEqual(deltas, ['你', '好，', '公众号'])
+  assert.equal(finishKind, 'max-tokens')
   assert.equal(captured.url, 'https://api.deepseek.com/v1/chat/completions')
   assert.equal(captured.body.model, 'demo-model')
   assert.equal(captured.body.max_tokens, 1200)
@@ -142,7 +145,7 @@ test('createStandaloneCtx 支持 SSE 分片流式响应并与 callModel 兼容',
 
 test('createStandaloneCtx 支持非流式 JSON 响应回退', async () => {
   const fetchImpl = async () => Response.json({
-    choices: [{ message: { content: '{"ok":true}' } }],
+    choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'length' }],
   })
   const ctx = createStandaloneCtx({
     apiKey: 'demo-credential-123',
@@ -150,8 +153,12 @@ test('createStandaloneCtx 支持非流式 JSON 响应回退', async () => {
     model: 'demo-model',
     fetchImpl,
   })
-  const text = await callModel(ctx, { system: 'sys', user: 'usr', task: 'json-fallback' })
+  let finishKind
+  const text = await callModel(ctx, {
+    system: 'sys', user: 'usr', task: 'json-fallback', onFinish: kind => { finishKind = kind },
+  })
   assert.equal(text, '{"ok":true}')
+  assert.equal(finishKind, 'max-tokens')
 })
 
 test('createStandaloneCtx 将参考图转为 OpenAI image_url 多模态消息，并在模型不支持识图时自动降级为纯文本', async () => {

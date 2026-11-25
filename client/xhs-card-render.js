@@ -1,6 +1,7 @@
 import { balanceXhsArtboard } from './xhs-card-balance.js'
-// 浏览器侧小红书 1080×1440 PNG 渲染器：
-// 优先使用 SVG <foreignObject> 将 Claude Design / OpenDesign 风格的 HTML/CSS 画布直接光栅化为 1080×1440 PNG，
+import { openCardAnimation, renderCardGif, setCardAnimationFrame } from './xhs-card-gif.js'
+// 在 1080×1440 逻辑画布上排版，以 2 倍像素密度导出 PNG。
+// 优先使用 SVG <foreignObject> 将 HTML/CSS 画布直接光栅化，
 // 自动将外部图片内联为 DataURL 以避免 Canvas 污染；若极端环境不支持 foreignObject，则无缝回退到 Canvas 2D 指令渲染。
 
 import { CARD_SIZE, FONT_STACK, layoutCard } from './xhs-card-layout.js'
@@ -14,10 +15,15 @@ import {
 
 const imageCache = new Map()
 const inlinedUrlCache = new Map()
+const EXPORT_SCALE = 2
+export const CARD_EXPORT_SIZE = {
+  width: CARD_SIZE.width * EXPORT_SCALE,
+  height: CARD_SIZE.height * EXPORT_SCALE,
+}
 
-function loadExternalImage(url, timeoutMs = 2500) {
+function loadExternalImage(url, timeoutMs = 2500, cache = true) {
   if (!url) return Promise.resolve(null)
-  if (imageCache.has(url)) return imageCache.get(url)
+  if (cache && imageCache.has(url)) return imageCache.get(url)
 
   const promise = new Promise(resolve => {
     const img = new Image()
@@ -26,7 +32,7 @@ function loadExternalImage(url, timeoutMs = 2500) {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      if (!result) imageCache.delete(url)
+      if (cache && !result) imageCache.delete(url)
       resolve(result)
     }
     const timer = setTimeout(() => finish(null), timeoutMs)
@@ -38,7 +44,7 @@ function loadExternalImage(url, timeoutMs = 2500) {
     img.src = url
   })
 
-  imageCache.set(url, promise)
+  if (cache) imageCache.set(url, promise)
   return promise
 }
 
@@ -50,9 +56,11 @@ async function inlineImageUrl(url) {
   const img = await loadExternalImage(url)
   if (!img) return ''
   try {
-    const w = Math.min(1080, img.naturalWidth || img.width || 800)
-    const scale = w / Math.max(1, img.naturalWidth || img.width || w)
-    const h = Math.max(1, Math.round((img.naturalHeight || img.height || 600) * scale))
+    const sourceWidth = img.naturalWidth || img.width || 800
+    const sourceHeight = img.naturalHeight || img.height || 600
+    const scale = Math.min(1, CARD_EXPORT_SIZE.width / sourceWidth, CARD_EXPORT_SIZE.height / sourceHeight)
+    const w = Math.max(1, Math.round(sourceWidth * scale))
+    const h = Math.max(1, Math.round(sourceHeight * scale))
     const c = document.createElement('canvas')
     c.width = w
     c.height = h
@@ -66,8 +74,8 @@ async function inlineImageUrl(url) {
   }
 }
 
-async function renderHtmlArtboardToCanvas(canvas, card, opts = {}) {
-  if (typeof document === 'undefined' || typeof XMLSerializer === 'undefined') {
+async function prepareHtmlArtboard(card, opts, animations) {
+  if (typeof document === 'undefined' || (!animations && typeof XMLSerializer === 'undefined')) {
     return null
   }
   const themeVars = resolveXhsThemeVars({
@@ -95,9 +103,19 @@ async function renderHtmlArtboardToCanvas(canvas, card, opts = {}) {
 
   // 将所有 <img> 的外部 URL 内联为 DataURL，防止 foreignObject 污染或无法加载外部资源
   const imgs = Array.from(artboard.querySelectorAll('img'))
-  await Promise.all(
+  const imageResults = await Promise.allSettled(
     imgs.map(async imgEl => {
       const src = imgEl.getAttribute('src') || ''
+      if (animations) {
+        const animation = await openCardAnimation(src)
+        if (animation) {
+          animation.element = imgEl
+          animation.source = src
+          animations.push(animation)
+          await setCardAnimationFrame(animation, 0)
+          return
+        }
+      }
       const inlined = await inlineImageUrl(src)
       if (inlined) {
         imgEl.setAttribute('src', inlined)
@@ -112,6 +130,8 @@ async function renderHtmlArtboardToCanvas(canvas, card, opts = {}) {
       }
     }),
   )
+  const failedImage = imageResults.find(result => result.status === 'rejected')
+  if (failedImage) throw failedImage.reason
 
   const measurementHost = document.createElement('div')
   measurementHost.style.cssText = 'position:fixed;left:-20000px;top:0;visibility:hidden'
@@ -127,20 +147,23 @@ async function renderHtmlArtboardToCanvas(canvas, card, opts = {}) {
     measurementHost.remove()
   }
 
+  return host
+}
+
+async function drawHtmlArtboard(canvas, host) {
+  if (!host || typeof XMLSerializer === 'undefined') return null
   const serializer = new XMLSerializer()
   const xhtml = serializer.serializeToString(host)
-  const svgMarkup = `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_SIZE.width}" height="${CARD_SIZE.height}" viewBox="0 0 ${CARD_SIZE.width} ${CARD_SIZE.height}"><foreignObject x="0" y="0" width="${CARD_SIZE.width}" height="${CARD_SIZE.height}">${xhtml}</foreignObject></svg>`
+  const svgMarkup = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}" viewBox="0 0 ${CARD_SIZE.width} ${CARD_SIZE.height}"><foreignObject x="0" y="0" width="${CARD_SIZE.width}" height="${CARD_SIZE.height}">${xhtml}</foreignObject></svg>`
   const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgMarkup)}`
 
-  const svgImg = await loadExternalImage(svgUrl, 5000)
+  const svgImg = await loadExternalImage(svgUrl, 5000, false)
   if (!svgImg) return null
 
-  canvas.width = CARD_SIZE.width
-  canvas.height = CARD_SIZE.height
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
-  ctx.clearRect(0, 0, CARD_SIZE.width, CARD_SIZE.height)
-  ctx.drawImage(svgImg, 0, 0, CARD_SIZE.width, CARD_SIZE.height)
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(svgImg, 0, 0)
   return { overflow: false }
 }
 
@@ -175,9 +198,7 @@ function drawCoverImage(ctx, img, x, y, w, h, radius = 0) {
   ctx.restore()
 }
 
-async function drawCardFallbackToCanvas(canvas, card, opts) {
-  canvas.width = CARD_SIZE.width
-  canvas.height = CARD_SIZE.height
+export async function drawCardFallbackToCanvas(canvas, card, opts, animationFrames = new Map()) {
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('浏览器不支持 Canvas 2D 渲染')
 
@@ -191,19 +212,23 @@ async function drawCardFallbackToCanvas(canvas, card, opts) {
   }
 
   const plan = layoutCard(card, opts, measure)
-  const imageOps = plan.ops.filter(op => op.op === 'image' && op.url)
-  const loadedImages = new Map()
-  if (imageOps.length) {
-    await Promise.all(
-      imageOps.map(async op => {
-        const img = await loadExternalImage(op.url)
-        if (img) loadedImages.set(op.url, img)
-      }),
-    )
+  const imageSources = new Set(plan.ops.filter(op => op.type === 'image').map(op => op.src))
+  for (const source of animationFrames.keys()) {
+    if (!imageSources.has(source)) return null
   }
+  const loadedImages = new Map()
+  await Promise.all([...imageSources].map(async source => {
+    const frame = animationFrames.get(source)
+    const img = await loadExternalImage(frame || source, 2500, !frame)
+    if (frame && !img) throw new Error('无法读取当前动图帧。')
+    if (img) loadedImages.set(source, img)
+  }))
 
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.setTransform(canvas.width / CARD_SIZE.width, 0, 0, canvas.height / CARD_SIZE.height, 0, 0)
   for (const item of plan.ops) {
-    if (item.op === 'rect') {
+    if (item.type === 'rect') {
       ctx.save()
       roundedRectPath(ctx, item.x, item.y, item.w, item.h, item.radius || 0)
       if (item.fill) {
@@ -216,7 +241,7 @@ async function drawCardFallbackToCanvas(canvas, card, opts) {
         ctx.stroke()
       }
       ctx.restore()
-    } else if (item.op === 'line') {
+    } else if (item.type === 'line') {
       ctx.save()
       ctx.beginPath()
       ctx.moveTo(item.x1, item.y1)
@@ -225,7 +250,7 @@ async function drawCardFallbackToCanvas(canvas, card, opts) {
       ctx.lineWidth = item.lineWidth || 1
       ctx.stroke()
       ctx.restore()
-    } else if (item.op === 'text') {
+    } else if (item.type === 'text') {
       ctx.save()
       ctx.font = `${item.weight || 400} ${item.fontPx}px ${item.family || FONT_STACK}`
       ctx.fillStyle = item.color || '#18181B'
@@ -233,8 +258,8 @@ async function drawCardFallbackToCanvas(canvas, card, opts) {
       ctx.textBaseline = 'alphabetic'
       ctx.fillText(item.text, item.x, item.y)
       ctx.restore()
-    } else if (item.op === 'image') {
-      const img = loadedImages.get(item.url)
+    } else if (item.type === 'image') {
+      const img = loadedImages.get(item.src)
       if (img) drawCoverImage(ctx, img, item.x, item.y, item.w, item.h, item.radius || 0)
     }
   }
@@ -242,9 +267,11 @@ async function drawCardFallbackToCanvas(canvas, card, opts) {
   return plan
 }
 
-export async function renderCardToBlob(card, opts = {}) {
+async function renderCardPng(card, opts, host) {
   const canvas = document.createElement('canvas')
-  let plan = await renderHtmlArtboardToCanvas(canvas, card, opts)
+  canvas.width = CARD_EXPORT_SIZE.width
+  canvas.height = CARD_EXPORT_SIZE.height
+  let plan = await drawHtmlArtboard(canvas, host)
   if (!plan) {
     plan = await drawCardFallbackToCanvas(canvas, card, opts)
   }
@@ -255,6 +282,31 @@ export async function renderCardToBlob(card, opts = {}) {
     }, 'image/png')
   })
   return { blob, overflow: Boolean(plan.overflow) }
+}
+
+export async function renderCardToBlob(card, opts = {}) {
+  return renderCardPng(card, opts, await prepareHtmlArtboard(card, opts))
+}
+
+export async function renderCardDownload(card, opts = {}) {
+  const animations = []
+  try {
+    const host = await prepareHtmlArtboard(card, opts, animations)
+    if (!animations.length) {
+      const { blob } = await renderCardPng(card, opts, host)
+      return { blob, extension: 'png' }
+    }
+    const canvas = document.createElement('canvas')
+    const blob = await renderCardGif(canvas, animations, async () => {
+      const rendered = await drawHtmlArtboard(canvas, host)
+      if (rendered) return rendered
+      const frames = new Map(animations.map(({ source, element }) => [source, element.src]))
+      return drawCardFallbackToCanvas(canvas, card, opts, frames)
+    })
+    return { blob, extension: 'gif' }
+  } finally {
+    for (const { decoder } of animations) decoder.close()
+  }
 }
 
 export async function renderCardToDataUrl(card, opts = {}) {

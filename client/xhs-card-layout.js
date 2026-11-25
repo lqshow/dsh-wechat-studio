@@ -801,9 +801,8 @@ function layoutMetrics(card, ctx, measure) {
     return numMatch ? { value: numMatch[1], label: numMatch[2], note: '' } : { value: line, label: '', note: '' }
   })
 
-  const cols = items.length <= 2 ? items.length : 2
+  const cols = 2
   const gap = 24
-  const cellW = Math.floor((contentWidth - gap * (cols - 1)) / cols)
   const valPx = items.length <= 2 ? 64 : 54
   const labelPx = 28
   const notePx = 23
@@ -817,6 +816,8 @@ function layoutMetrics(card, ctx, measure) {
   items.forEach((item, i) => {
     const row = Math.floor(i / cols)
     const col = i % cols
+    const rowSize = Math.min(cols, items.length - row * cols)
+    const cellW = Math.floor((contentWidth - gap * (rowSize - 1)) / rowSize)
     const cx = PADDING + col * (cellW + gap)
     const cy = y + row * (cellH + gap)
     ops.push({

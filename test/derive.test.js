@@ -315,6 +315,62 @@ test('小红书派生：定向修复重试携带 previousOutput 与全部错误�
   )
 })
 
+test('小红书蓝图截断时提高重试预算，受模型配置限制且保留完整蓝图', async () => {
+  const { store, article } = setupStore()
+  await store.update(state => { state.articles.push(article); state.currentId = article.id })
+  const [b1, b2] = article.blocks
+  const valid = {
+    title: '实操复盘',
+    body: '这是一段符合一百字要求的测试小红书正文内容，重点记录我们在做公众号拆解和最小可用版本验证时的真实心得体会。'.repeat(2),
+    tags: ['实操复盘', '最小版本', '个人经验'],
+    cards: [
+      { kind: 'cover', heading: '实操复盘', lines: ['先做最小版本'], source: [b1.id] },
+      { kind: 'quote', heading: '核心方法', lines: ['第一段核心结论，增长 1,200 人。'], source: [b1.id] },
+      { kind: 'list', heading: '执行步骤', lines: ['先做最小版本', '再收集真实反馈'], source: [b2.id] },
+      { kind: 'quote', heading: '', lines: ['第二段具体步骤，先做最小版本再收集反馈。'], source: [b2.id] },
+      { kind: 'end', heading: '点个收藏', lines: ['欢迎评论区交流'], source: [] },
+    ],
+  }
+  const truncated = '<xhs-meta>{"title":"实操复盘","cards":['
+  const complete = `<xhs-meta>${JSON.stringify(valid)}</xhs-meta>`
+  for (const scenario of [
+    { limit: 64_000, texts: [truncated, complete], budgets: [6144, 16384] },
+    { limit: 10_000, texts: [truncated, truncated], budgets: [6144, 10000], error: /版式蓝图.*10000 tokens/ },
+    { limit: 4096, texts: [truncated, complete], budgets: [4096, 4096] },
+    { texts: ['', complete], budgets: [6144, 16384] },
+    { texts: [complete], budgets: [6144] },
+    { texts: ['', ''], budgets: [6144, 6144], finish: 'stop', error: /没有返回正文/ },
+    { texts: ['格式不对', complete], budgets: [6144, 6144], finish: 'stop' },
+  ]) {
+    const progress = []
+    const pending = [...scenario.texts]
+    const budgets = []
+    const llm = {
+      async resolveModelInfo() { return { defaultMaxTokens: scenario.limit } },
+      prepareCall({ maxTokens }) {
+        budgets.push(maxTokens)
+        return {
+          config: {},
+          async *stream() {
+            const text = pending.shift()
+            if (text) yield { type: 'text-delta', text }
+            else yield { type: 'reasoning-delta', text: '模型正在规划版式' }
+            yield { type: 'finish', reason: { kind: scenario.finish ?? 'max-tokens' } }
+          },
+        }
+      },
+    }
+    const ctx = { get: name => name === 'llm' ? llm : { currentSelection: () => ({ provider: 'p', model: 'm' }) } }
+    const generate = () => generateDerivative(ctx, store, {
+      id: article.id, platform: 'xhs', stagedHtml: false, onProgress: item => progress.push(item),
+    })
+    if (scenario.error) await assert.rejects(generate, scenario.error)
+    else assert.equal((await generate()).payload.title, valid.title)
+    assert.deepEqual(budgets, scenario.budgets)
+    if (budgets[1] > budgets[0]) assert.ok(progress.some(item => item.message.includes('提高输出预算')))
+  }
+})
+
 test('extractJson 自动修复模型输出中的未转义双引号、裸换行、尾随逗号与 <think> 块', () => {
   const dirtyOutput = `<think>先构思一下小红书卡片内容</think>
 \`\`\`json

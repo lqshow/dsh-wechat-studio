@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { callModel, extractJson, loadSkill } from './ai.js'
+import { callModel, configuredModelMaxTokens, extractJson, loadSkill } from './ai.js'
 import { touch } from './article.js'
 import { portableBlocks } from './derive-markdown.js'
 import {
@@ -27,6 +27,8 @@ import { readSettings } from './settings.js'
 import { readStyleState } from './writing-style.js'
 
 const MAX_DERIVE_INPUT_CHARS = 30_000
+const XHS_BLUEPRINT_MAX_TOKENS = 6144
+const XHS_BLUEPRINT_RETRY_MAX_TOKENS = 16_384
 const XHS_SINGLE_CARD_TIMEOUT_MS = 240_000
 const fail = (message, status = 400, extra = {}) => Object.assign(new Error(message), { status }, extra)
 
@@ -761,7 +763,8 @@ export async function generateDerivative(ctx, store, {
     throw fail('这份派生稿你手动改过，重新生成会覆盖。', 409, { code: 'edited' })
   }
 
-  onProgress?.({ stage: 'planning', totalCards: 0, completedCards: [], activeCardIndex: 0, message: '正在策划整套小红书笔记文案与每页版式蓝图…' })
+  const planningProgress = { stage: 'planning', totalCards: 0, completedCards: [], activeCardIndex: 0 }
+  onProgress?.({ ...planningProgress, message: '正在策划整套小红书笔记文案与每页版式蓝图…' })
   const prepared = await prepareDerivePrompt(article, { platform, variant, designPrompt, referenceImages, root: dataDir })
   const stage1ReferenceImages = prepared.referenceImages.map((dataUrl, index) => ({
     id: `ref-${index + 1}`,
@@ -799,7 +802,16 @@ export async function generateDerivative(ctx, store, {
   let firstParsed = null
   let stage1UsedMarkup = false
   let stage1HasBlueprint = false
+  const xhsModelLimit = platform === 'xhs' ? await configuredModelMaxTokens(ctx) : null
+  const initialMaxTokens = platform === 'xhs' ? Math.min(XHS_BLUEPRINT_MAX_TOKENS, xhsModelLimit ?? Infinity) : 8192
   for (let attempt = 0; attempt < 2; attempt++) {
+    const retryAfterTruncation = lastError?.code === 'XHS_BLUEPRINT_MAX_TOKENS'
+    const maxTokens = retryAfterTruncation
+      ? Math.min(XHS_BLUEPRINT_RETRY_MAX_TOKENS, xhsModelLimit ?? Infinity)
+      : initialMaxTokens
+    if (maxTokens > initialMaxTokens) {
+      onProgress?.({ ...planningProgress, message: '版式蓝图输出已截断，正在提高输出预算后重试…' })
+    }
     const userMessage = attempt === 0
       ? prepared.user
       : JSON.stringify({
@@ -809,17 +821,21 @@ export async function generateDerivative(ctx, store, {
         repairInstruction: firstParsed
           ? '请基于 previousOutput 仅修正 previousError 中列出的问题，保留其余已合格的内容不要整体重写，并输出完整合法的格式。'
           : platform === 'xhs'
-            ? '上一轮输出未能解析。请严格输出 <xhs-meta>{合法JSON}</xhs-meta> 与可选 <xhs-style>...</xhs-style>，文案内部引用一律使用中文引号「」，不要在 JSON 字符串里写未转义双引号，cards 中不要直接写 html 字段。'
+            ? retryAfterTruncation
+              ? '上一轮达到输出上限。请缩短版式说明，省略可选 CSS，优先输出完整的 <xhs-meta>{合法JSON}</xhs-meta>。'
+              : '上一轮输出未能解析。请严格输出 <xhs-meta>{合法JSON}</xhs-meta> 与可选 <xhs-style>...</xhs-style>，文案内部引用一律使用中文引号「」，不要在 JSON 字符串里写未转义双引号，cards 中不要直接写 html 字段。'
             : '上一轮输出未能解析为合法 JSON（可能包含未转义的英文双引号或内容被截断）。请只输出紧凑合法的 JSON 对象，文案内部引用请一律使用中文引号「」。',
       })
+    let finishKind
     const raw = await callModel(ctx, {
       system: prepared.system,
       user: userMessage,
       images: platform === 'xhs' ? stage1ReferenceImages : [],
       onImageFallback,
       task: `derive-${platform}`,
-      maxTokens: platform === 'xhs' ? 6144 : 8192,
-      signal: AbortSignal.timeout(120_000),
+      maxTokens,
+      onFinish: kind => { finishKind = kind },
+      signal: AbortSignal.timeout(maxTokens > initialMaxTokens ? 240_000 : 120_000),
     })
     try {
       let parsed
@@ -834,7 +850,15 @@ export async function generateDerivative(ctx, store, {
       } else {
         parsed = extractJson(raw)
       }
-      if (!parsed) throw fail('模型没有返回可解析的 JSON。', 502)
+      if (!parsed) {
+        if (platform === 'xhs' && finishKind === 'max-tokens') {
+          throw fail(`小红书版式蓝图输出达到上限（${maxTokens} tokens），生成结果被截断。`, 502, { code: 'XHS_BLUEPRINT_MAX_TOKENS' })
+        }
+        if (platform === 'xhs' && !raw.trim()) {
+          throw fail('模型没有返回正文，无法生成小红书版式蓝图。', 502)
+        }
+        throw fail('模型没有返回可解析的 JSON。', 502)
+      }
       if (attempt === 0) firstParsed = parsed
       normalized = validate(parsed, { strictCardLength: attempt === 0 })
       break

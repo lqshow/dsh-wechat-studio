@@ -18,6 +18,22 @@ import {
   synthesizeCardHtml,
 } from '../client/xhs-card-html.js'
 
+test('数据卡按实际指标数撑满每行，四项排成 2×2', () => {
+  for (const [count, expectedSpans] of [
+    [1, [6]], [2, [3, 3]], [3, [2, 2, 2]], [4, [3, 3, 3, 3]], [5, [2, 2, 2, 3, 3]],
+  ]) {
+    const html = ensureCardHtml({
+      kind: 'metrics',
+      lines: Array.from({ length: count }, (_, index) => `${index + 1} 秒 | 响应时间`),
+    })
+    assert.match(html, /class="cd-col-grid cd-metrics-grid"/)
+    assert.deepEqual(
+      Array.from(html.matchAll(/grid-column:span (\d+)/g), match => Number(match[1])),
+      expectedSpans,
+    )
+  }
+})
+
 test('xhs-card-html.js 纯函数且不依赖 node:* 或 DOM 全局对象', async () => {
   const src = await readFile(new URL('../client/xhs-card-html.js', import.meta.url), 'utf8')
   assert.doesNotMatch(src, /from\s+['"]node:/)

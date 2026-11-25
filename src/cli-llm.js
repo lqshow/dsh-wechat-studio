@@ -81,9 +81,10 @@ function parseSseData(line) {
   if (!payload || payload === '[DONE]') return { done: true }
   try {
     const parsed = JSON.parse(payload)
-    const delta = parsed?.choices?.[0]?.delta?.content
-    if (typeof delta === 'string' && delta) return { text: delta }
-    return null
+    const choice = parsed?.choices?.[0]
+    if (!choice) return null
+    const delta = choice.delta?.content
+    return { text: typeof delta === 'string' ? delta : '', truncated: choice.finish_reason === 'length' }
   } catch {
     return null
   }
@@ -160,12 +161,13 @@ export function createStandaloneCtx({ apiKey = '', baseUrl = DEFAULT_BASE_URL, m
             if (typeof content === 'string' && content) {
               yield { type: 'text-delta', text: content }
             }
-            yield { type: 'finish', reason: { kind: 'stop' } }
+            yield { type: 'finish', reason: { kind: data?.choices?.[0]?.finish_reason === 'length' ? 'max-tokens' : 'stop' } }
             return
           }
 
           const decoder = new TextDecoder()
           let buffer = ''
+          let finishKind = 'stop'
           for await (const chunk of res.body) {
             buffer += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })
             const lines = buffer.split(/\r?\n/)
@@ -174,18 +176,20 @@ export function createStandaloneCtx({ apiKey = '', baseUrl = DEFAULT_BASE_URL, m
               const parsed = parseSseData(line.trim())
               if (!parsed) continue
               if (parsed.done) {
-                yield { type: 'finish', reason: { kind: 'stop' } }
+                yield { type: 'finish', reason: { kind: finishKind } }
                 return
               }
+              if (parsed.truncated) finishKind = 'max-tokens'
               if (parsed.text) yield { type: 'text-delta', text: parsed.text }
             }
           }
           buffer += decoder.decode()
           for (const line of buffer.split(/\r?\n/)) {
             const parsed = parseSseData(line.trim())
+            if (parsed?.truncated) finishKind = 'max-tokens'
             if (parsed?.text) yield { type: 'text-delta', text: parsed.text }
           }
-          yield { type: 'finish', reason: { kind: 'stop' } }
+          yield { type: 'finish', reason: { kind: finishKind } }
         },
       }
       return typeof cb === 'function' ? cb(controls) : controls

@@ -28,6 +28,7 @@ import {
   clearDeriveDraft,
   copyText,
   deleteDerivative,
+  dismissXhsError,
   downloadBlob,
   generateDerivative,
   getState,
@@ -37,8 +38,9 @@ import {
   setDeriveDraft,
   toast,
   useStudio,
+  visibleXhsError,
 } from './state.js'
-import { renderCardToBlob } from './xhs-card-render.js'
+import { renderCardDownload } from './xhs-card-render.js'
 import {
   DEFAULT_XHS_TWEAKS,
   FONT_FAMILIES,
@@ -546,6 +548,7 @@ function XhsArtboardShadow({ html, className, themeVars, styleText, onArtboardRe
 
 function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
   const deriveDrafts = useStudio(s => s.deriveDrafts)
+  const dismissedXhsErrors = useStudio(s => s.dismissedXhsErrors)
   const modelSupportsImages = useStudio(s => s.data?.modelSupportsImages ?? null)
   const record = article.derivatives?.find(item => item.platform === 'xhs') ?? null
   const draftEntry = deriveDrafts[deriveDraftKey(article.id, 'xhs')] ?? null
@@ -576,7 +579,13 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
   const [redesignConfirm, setRedesignConfirm] = React.useState(null)
   const [pendingRedesignOffer, setPendingRedesignOffer] = React.useState(null)
   const [lightboxIndex, setLightboxIndex] = React.useState(null)
+  const errorOnExit = React.useMemo(() => ({ articleId: article.id, text: null }), [article.id])
+  React.useLayoutEffect(() => {
+    errorOnExit.text = article.xhsError
+  }, [errorOnExit, article.xhsError])
   const [packing, setPacking] = React.useState(false)
+  const [downloadingCard, setDownloadingCard] = React.useState(null)
+  const exportingCards = packing || downloadingCard !== null
   const imageInputRef = React.useRef(null)
   const deckRefInputRef = React.useRef(null)
   const cardRefInputRef = React.useRef(null)
@@ -638,6 +647,8 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
     setDesignPrompt(record?.payload?.designPrompt || '')
     setLightboxIndex(null)
   }, [article.id])
+
+  React.useEffect(() => () => dismissXhsError(errorOnExit.articleId, errorOnExit.text), [errorOnExit])
 
   React.useEffect(() => {
     if (record?.payload?.designPrompt !== undefined) {
@@ -738,7 +749,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
   }, [safeSelected, selectedElId, selectedCardHtml, selectedCard?.pageCss, draft?.customCss, zoom, stageMode, themeVars])
 
   const xhsJob = article.xhsJob ?? null
-  const xhsError = article.xhsError ?? null
+  const xhsError = visibleXhsError(article, dismissedXhsErrors)
   const busy = pending === 'derive/xhs'
     || Boolean(xhsJob)
     || Boolean(pending?.startsWith('derive/xhs/card/'))
@@ -1064,9 +1075,10 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
 
   const downloadOneCard = async index => {
     const card = cards[index]
-    if (!card) return
+    if (!card || exportingCards) return
+    setDownloadingCard(index)
     try {
-      const { blob } = await renderCardToBlob(card, {
+      const { blob, extension } = await renderCardDownload(card, {
         index,
         total: cards.length,
         palette,
@@ -1076,20 +1088,22 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
         customCss: draft?.customCss || '',
       })
       const num = String(index + 1).padStart(2, '0')
-      downloadBlob(blob, `${safeFileBase(draft.title || article.title)}-${num}.png`)
+      downloadBlob(blob, `${safeFileBase(draft.title || article.title)}-${num}.${extension}`)
     } catch (err) {
       toast(err.message || '导出图片失败', true)
+    } finally {
+      setDownloadingCard(null)
     }
   }
 
   const downloadAllZip = async () => {
-    if (!cards.length) return
+    if (!cards.length || exportingCards) return
     setPacking(true)
     try {
       const base = safeFileBase(draft.title || article.title)
       const files = []
       for (let i = 0; i < cards.length; i++) {
-        const { blob } = await renderCardToBlob(cards[i], {
+        const { blob, extension } = await renderCardDownload(cards[i], {
           index: i,
           total: cards.length,
           palette,
@@ -1099,11 +1113,11 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
           customCss: draft?.customCss || '',
         })
         const data = new Uint8Array(await blob.arrayBuffer())
-        files.push({ name: `${base}-${String(i + 1).padStart(2, '0')}.png`, data })
+        files.push({ name: `${base}-${String(i + 1).padStart(2, '0')}.${extension}`, data })
       }
       const zipBytes = createZip(files)
       downloadBlob(new Blob([zipBytes], { type: 'application/zip' }), `${base}-小红书卡片.zip`)
-      toast(`已打包 ${files.length} 张 1080×1440 PNG 卡片`)
+      toast(`已打包 ${files.length} 张卡片`)
     } catch (err) {
       toast(err.message || '打包卡片失败', true)
     } finally {
@@ -1531,7 +1545,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
             <button type="button" className="ws-btn" disabled={busy} onClick={() => copyText(xhsClipboardText(draft), '已复制小红书标题、正文与标签')}>
               复制文案
             </button>
-            <button type="button" className="ws-btn" aria-label="下载全部卡片（.zip）" disabled={busy} onClick={downloadAllZip}>
+            <button type="button" className="ws-btn" aria-label="下载全部卡片（.zip）" disabled={busy || exportingCards} onClick={downloadAllZip}>
               {packing ? '打包中…' : '导出 .zip'}
             </button>
             {dirty ? (
@@ -1621,6 +1635,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
               {xhsError && !xhsJob ? (
                 <div className="ws-banner is-error" role="status">
                   <span>{xhsError}</span>
+                  <button type="button" className="ws-cd-icon-btn" aria-label="关闭错误提示" onClick={() => dismissXhsError(article.id, xhsError)}>×</button>
                 </div>
               ) : null}
 
@@ -1887,9 +1902,9 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                             <button
                               type="button"
                               className="ws-cd-icon-btn"
-                              data-tip="下载 PNG"
+                              data-tip="下载图片"
                               aria-label={`下载第 ${index + 1} 页卡片`}
-                              disabled={isCardPending}
+                              disabled={isCardPending || exportingCards}
                               onClick={() => downloadOneCard(index)}
                             >
                               ↓
@@ -3334,8 +3349,8 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
               >
                 编辑此页
               </button>
-              <button type="button" className="ws-btn is-primary" disabled={lightboxPending} onClick={() => downloadOneCard(activeLightbox)}>
-                下载 PNG
+              <button type="button" className="ws-btn is-primary" disabled={lightboxPending || exportingCards} onClick={() => downloadOneCard(activeLightbox)}>
+                {downloadingCard === activeLightbox ? '导出中…' : '下载图片'}
               </button>
             </div>
           </div>

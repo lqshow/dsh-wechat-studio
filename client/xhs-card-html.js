@@ -489,6 +489,12 @@ export const XHS_ARTBOARD_CSS = `
   gap: 16px;
   flex: 1;
 }
+.cd-metrics-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.cd-metrics-grid .cd-metric-num {
+  overflow-wrap: anywhere;
+}
 .cd-bento {
   background: var(--xhs-card, #FFFFFF);
   border: 1.5px solid var(--xhs-line, #E4E4EE);
@@ -1283,7 +1289,10 @@ function synthesizeMetricsHtml(card, { index, total, author }) {
     ? card.lines
     : ['30s | 响应耗时 | 较传统方式缩短 90%', '0 次 | 返工次数 | 全链路一次跑通']
   const parsed = rawLines.map(splitPipeParts)
-  const cols = Math.min(3, Math.max(2, parsed.length))
+  const cols = Math.min(3, parsed.length)
+  const rowCount = Math.ceil(parsed.length / 3)
+  const itemsPerRow = Math.floor(parsed.length / rowCount)
+  const extraRows = parsed.length % rowCount
   const shotHtml = renderImageOrSlot(card)
 
   return `
@@ -1329,13 +1338,14 @@ function synthesizeMetricsHtml(card, { index, total, author }) {
         </div>
       `}
 
-      <div class="cd-col-grid" style="--cols:${cols};">
+      <div class="cd-col-grid cd-metrics-grid">
         ${parsed.map((parts, idx) => {
+          const rowSize = idx < extraRows * (itemsPerRow + 1) ? itemsPerRow + 1 : itemsPerRow
           const num = parts[0] || `#${idx + 1}`
           const label = parts[1] || `关键指标 0${idx + 1}`
           const desc = parts[2] || parts[1] || '实测表现稳定'
           return `
-            <div class="cd-bento">
+            <div class="cd-bento" style="grid-column:span ${6 / rowSize}">
               <span class="cd-metric-label">${escapeHtml(label)}</span>
               <div class="cd-metric-num">${escapeHtml(num)}</div>
               <span class="cd-metric-sub">${escapeHtml(desc)}</span>

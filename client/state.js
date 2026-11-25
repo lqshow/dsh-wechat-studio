@@ -11,7 +11,7 @@ export function countCurrentParagraphDrafts(blocks, drafts) {
   return blocks.filter(block => drafts.has(block.id)).length
 }
 
-let snap = { data: null, error: null, view: 'paper', paperHome: true, dialog: null, toast: null, editing: null, layout: null, deriveDrafts: {}, pending: null, chatOpen: true, bannerTried: {}, module: 'paper', skills: null, style: null, styleWizardStep: 1, styleWizardReturnTo: null, newDialogDraft: null, settings: null, update: null, insights: null, insightsRange: 'all', insightsError: null, insightsRulePreview: null, svgCardCandidate: null, coverStyles: null, customCoverWizard: { open: false, mode: 'create', styleId: null, returnTo: null, draftSession: null }, selectedCoverStyleId: null }
+let snap = { data: null, error: null, view: 'paper', paperHome: true, dialog: null, toast: null, editing: null, layout: null, deriveDrafts: {}, dismissedXhsErrors: {}, pending: null, chatOpen: true, bannerTried: {}, module: 'paper', skills: null, style: null, styleWizardStep: 1, styleWizardReturnTo: null, newDialogDraft: null, settings: null, update: null, insights: null, insightsRange: 'all', insightsError: null, insightsRulePreview: null, svgCardCandidate: null, coverStyles: null, customCoverWizard: { open: false, mode: 'create', styleId: null, returnTo: null, draftSession: null }, selectedCoverStyleId: null }
 const listeners = new Set()
 let timer = null
 
@@ -26,6 +26,27 @@ export function setState(patch) {
 
 export function useStudio(selector) {
   return React.useSyncExternalStore(fn => { listeners.add(fn); return () => listeners.delete(fn) }, () => selector(snap))
+}
+
+export function visibleXhsError(article, dismissedErrors = {}) {
+  if (!article?.xhsError || dismissedErrors[article.id] === article.xhsError) return null
+  return article.xhsError
+}
+
+export function dismissXhsError(articleId, error) {
+  if (!error) return
+  setState(s => s.dismissedXhsErrors[articleId] === error ? s : {
+    dismissedXhsErrors: { ...s.dismissedXhsErrors, [articleId]: error },
+  })
+}
+
+export function resetXhsErrorDismissal(articleId) {
+  setState(s => {
+    if (!Object.hasOwn(s.dismissedXhsErrors, articleId)) return s
+    const dismissedXhsErrors = { ...s.dismissedXhsErrors }
+    delete dismissedXhsErrors[articleId]
+    return { dismissedXhsErrors }
+  })
 }
 
 export function toast(text, error = false) {
@@ -83,6 +104,7 @@ function accept(data) {
   const deriveDrafts = pruneDeriveDrafts(snap.deriveDrafts, data.articles)
   setState({ data, error: null, layout, deriveDrafts })
   if (prevCurrent && current && prevCurrent.id === current.id && prevCurrent.xhsJob && !current.xhsJob) {
+    if (current.xhsError) resetXhsErrorDismissal(current.id)
     if (current.xhsError) toast(current.xhsError, true)
     else if (current.derivatives?.some(d => d.platform === 'xhs')) toast('小红书卡片已全部精绘完成')
   }
@@ -280,6 +302,7 @@ export async function generateDerivative({
   confirmOverwrite = false,
 }) {
   const targetId = id ?? snap.data?.current?.id
+  if (platform === 'xhs') resetXhsErrorDismissal(targetId)
   setState({ pending: `derive/${platform}` })
   try {
     const cleanRefs = Array.isArray(referenceImages)

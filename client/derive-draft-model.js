@@ -134,7 +134,7 @@ export function summarizeCardPreviews(settledResults) {
       status: 'ready',
       items,
       failedCount,
-      error: `有 ${failedCount} 张卡片预览渲染失败，可点击重试或直接下载 PNG。`,
+      error: `有 ${failedCount} 张卡片预览渲染失败，可点击重试或直接下载图片。`,
     }
   }
   return { status: 'ready', items, failedCount: 0, error: null }
