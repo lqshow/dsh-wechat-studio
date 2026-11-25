@@ -1,5 +1,5 @@
 import { COVER_PROVIDERS, modelsFor } from './cover-options.js'
-import { normalizeGeminiBaseUrl } from './cover.js'
+import { normalizeGeminiBaseUrl, normalizeOpenAIBaseUrl } from './cover.js'
 import { DEFAULT_PERSONA, normalizePersona, PERSONA_GENDERS, PERSONA_OUTFITS } from './cover-persona.js'
 import { findBlocked, loadCoverBlocklist } from './cover-prompt.js'
 import { writeJsonAtomic } from './fs-json.js'
@@ -109,6 +109,12 @@ export async function readSettings(root) {
       if (typeof saved.geminiBaseUrl !== 'string' || !saved.geminiBaseUrl.trim()) return ''
       try { return normalizeGeminiBaseUrl(saved.geminiBaseUrl) } catch { return '' }
     })(),
+    openaiModel: modelsFor('openai').find(model => model.id === saved.openaiModel)?.id ?? modelsFor('openai')[0].id,
+    openaiKey: typeof saved.openaiKey === 'string' ? saved.openaiKey : '',
+    openaiBaseUrl: (() => {
+      if (typeof saved.openaiBaseUrl !== 'string' || !saved.openaiBaseUrl.trim()) return ''
+      try { return normalizeOpenAIBaseUrl(saved.openaiBaseUrl) } catch { return '' }
+    })(),
     portraitUrl: typeof saved.portraitUrl === 'string' ? saved.portraitUrl : '',
     persona: normalizePersona(saved.persona),
     cloudinary: {
@@ -193,6 +199,16 @@ export async function updateSettings(root, body) {
   if (typeof body.geminiKey === 'string') next.geminiKey = body.geminiKey.trim().slice(0, 400)
   if (typeof body.geminiBaseUrl === 'string') {
     next.geminiBaseUrl = body.geminiBaseUrl.trim() ? normalizeGeminiBaseUrl(body.geminiBaseUrl) : ''
+  }
+  if (body.openaiModel !== undefined) {
+    if (!modelsFor('openai').some(model => model.id === body.openaiModel)) {
+      throw Object.assign(new Error('请选择支持的 OpenAI 封面模型。'), { status: 400 })
+    }
+    next.openaiModel = body.openaiModel
+  }
+  if (typeof body.openaiKey === 'string') next.openaiKey = body.openaiKey.trim().slice(0, 400)
+  if (typeof body.openaiBaseUrl === 'string') {
+    next.openaiBaseUrl = body.openaiBaseUrl.trim() ? normalizeOpenAIBaseUrl(body.openaiBaseUrl) : ''
   }
   if (typeof body.portraitUrl === 'string') {
     const value = body.portraitUrl.trim().slice(0, 2000)
@@ -293,6 +309,9 @@ export function publicSettings(settings) {
     geminiModel: settings.geminiModel,
     geminiKeySet: Boolean(settings.geminiKey),
     geminiBaseUrl: settings.geminiBaseUrl,
+    openaiModel: settings.openaiModel,
+    openaiKeySet: Boolean(settings.openaiKey),
+    openaiBaseUrl: settings.openaiBaseUrl,
     portraitUrl: settings.portraitUrl,
     persona: settings.persona ?? DEFAULT_PERSONA,
     portraitIsAuthorSample: settings.portraitUrl === AUTHOR_SAMPLE_PORTRAIT,

@@ -1319,6 +1319,61 @@ test('CLI settings 与 cover：支持 Google Gemini（Nano Banana）配置、自
   }
 })
 
+test('CLI settings 与 cover：支持 OpenAI（GPT Image）配置、自定义 Base URL、环境变量覆盖与生图', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ws-cli-openai-'))
+  const png = makePngBuffer(94, 40)
+  const secret = 'sk-openai-cli-secret-999'
+  const keyFlag = ['--openai', 'key'].join('-')
+  const keyEnv = ['OPENAI', 'API', 'KEY'].join('_')
+  const baseEnv = ['OPENAI', 'BASE', 'URL'].join('_')
+  try {
+    const setIo = makeIo()
+    assert.equal(await runCli([
+      'settings', 'set',
+      '--cover-provider', 'openai',
+      '--openai-model', 'gpt-image-2.6-flare',
+      keyFlag, secret,
+      '--openai-base-url', 'https://relay.example.com/openai/v1/',
+      '--data-dir', dir,
+      '--json',
+    ], setIo), 0)
+    const setOut = setIo.read().out
+    assert.doesNotMatch(setOut, new RegExp(secret))
+    const setRes = JSON.parse(setOut)
+    assert.equal(setRes.ok, true)
+    assert.equal(setRes.settings.coverProvider, 'openai')
+    assert.equal(setRes.settings.openaiModel, 'gpt-image-2.6-flare')
+    assert.equal(setRes.settings.openaiKeySet, true)
+    assert.equal(setRes.settings.openaiBaseUrl, 'https://relay.example.com/openai/v1')
+
+    const getHumanIo = makeIo()
+    assert.equal(await runCli(['settings', 'get', '--data-dir', dir], getHumanIo), 0)
+    assert.match(getHumanIo.read().out, /openai=gpt-image-2\.6-flare/)
+    assert.match(getHumanIo.read().out, /OpenAI 已配置/)
+
+    const promptPath = join(dir, 'prompt.txt')
+    const outPath = join(dir, 'cover-openai.png')
+    await writeFile(promptPath, '测试 OpenAI GPT Image 封面提示词', 'utf8')
+    const calls = []
+    const coverIo = makeIo({
+      env: { [keyEnv]: 'sk-openai-env-override', [baseEnv]: 'https://env-relay.example.com/v1/' },
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init })
+        return Response.json({ data: [{ b64_json: png.toString('base64') }] })
+      },
+    })
+    assert.equal(await runCli([
+      'cover', '--prompt-file', promptPath, '--provider', 'openai', '--out', outPath, '--data-dir', dir, '--json',
+    ], coverIo), 0)
+    assert.equal(calls[0].url, 'https://env-relay.example.com/v1/images/generations')
+    assert.equal(calls[0].init.headers.authorization, 'Bearer sk-openai-env-override')
+    assert.equal(JSON.parse(calls[0].init.body).model, 'gpt-image-2.6-flare')
+    assert.ok((await readFile(outPath)).length > 0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('CLI cover 子命令：支持本地自定义封面风格、--prompt-only、usePortrait 透传与非法风格报错', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ws-cli-custom-cover-'))
   const mdPath = join(dir, 'post.md')

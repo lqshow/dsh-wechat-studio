@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { BAILIAN_SIZES, GEMINI_DEFAULT_BASE_URL, MINIMAX_SIZES } from './cover-options.js'
+import { BAILIAN_SIZES, GEMINI_DEFAULT_BASE_URL, MINIMAX_SIZES, OPENAI_DEFAULT_BASE_URL, OPENAI_LEGACY_LANDSCAPE_SIZE, OPENAI_SIZES } from './cover-options.js'
 import { resolveCoverStyleName } from './cover-styles.js'
 export { coverPrompt } from './cover-prompt.js'
 
@@ -189,7 +189,7 @@ function detectReferenceMimeType(image, contentType = '') {
   return ''
 }
 
-async function loadGeminiReferenceImage(referenceImage, fetchImpl) {
+async function loadReferenceImage(referenceImage, fetchImpl) {
   const dataMatch = typeof referenceImage === 'string'
     ? referenceImage.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)$/i)
     : null
@@ -199,7 +199,9 @@ async function loadGeminiReferenceImage(referenceImage, fetchImpl) {
     if (!cleaned || cleaned.length > MAX_B64_CHARS) throw new Error('参考图无效或超过 24 MB。')
     const decoded = Buffer.from(cleaned, 'base64')
     if (!decoded.length || decoded.length > MAX_IMAGE) throw new Error('参考图无效或超过 24 MB。')
-    return { mimeType, data: cleaned }
+    const detected = detectReferenceMimeType(decoded, mimeType)
+    if (!detected) throw new Error('参考图仅支持 PNG、JPEG 或 WebP 格式。')
+    return { mimeType: detected, data: cleaned, buffer: decoded }
   }
   const refUrl = typeof referenceImage === 'string' && URL.canParse(referenceImage) ? new URL(referenceImage) : null
   if (!refUrl || refUrl.protocol !== 'https:' || refUrl.username || refUrl.password) {
@@ -224,7 +226,12 @@ async function loadGeminiReferenceImage(referenceImage, fetchImpl) {
   const image = Buffer.concat(chunks, size)
   const mimeType = detectReferenceMimeType(image, refRes.headers?.get?.('content-type') ?? '')
   if (!mimeType) throw new Error('参考图仅支持 PNG、JPEG 或 WebP 格式。')
-  return { mimeType, data: image.toString('base64') }
+  return { mimeType, data: image.toString('base64'), buffer: image }
+}
+
+async function loadGeminiReferenceImage(referenceImage, fetchImpl) {
+  const { mimeType, data } = await loadReferenceImage(referenceImage, fetchImpl)
+  return { mimeType, data }
 }
 
 export async function generateGeminiCover(
@@ -310,11 +317,185 @@ export async function generateGeminiCover(
   }
 }
 
+const OPENAI_TIMEOUT_MS = 180_000
+const OPENAI_FIXED_SIZE_MODELS = new Set(['gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'])
+const OPENAI_MODERATION_CODES = new Set(['moderation_blocked', 'content_policy_violation', 'safety_system'])
+
+export function normalizeOpenAIBaseUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return OPENAI_DEFAULT_BASE_URL
+  const trimmed = value.trim().slice(0, 500)
+  const parsed = URL.canParse(trimmed) ? new URL(trimmed) : null
+  if (!parsed || parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw Object.assign(new Error('OpenAI API 地址需要是不带账号密码的 https:// 地址。'), { status: 400 })
+  }
+  let pathname = parsed.pathname.replace(/\/+$/, '')
+  pathname = pathname.replace(/\/images\/(?:generations|edits)$/i, '').replace(/\/+$/, '')
+  if (!pathname) pathname = '/v1'
+  return `${parsed.origin}${pathname}`
+}
+
+function openaiRequestId(body, res, apiKey) {
+  return [
+    body?.request_id,
+    body?.error?.request_id,
+    res?.headers?.get?.('x-request-id'),
+  ].map(value => providerDetail(value, 120, apiKey)).find(Boolean) ?? ''
+}
+
+function openaiErrorMessage({ status, body, model, requestId, apiKey, subject = '封面' }) {
+  const code = providerDetail(body?.error?.code, 120, apiKey)
+  const type = providerDetail(body?.error?.type, 120, apiKey)
+  const message = providerDetail(body?.error?.message, 400, apiKey)
+  const requestSuffix = requestId ? ` 请求 ID：${requestId}` : ''
+  if (status === 401 || code === 'invalid_api_key') {
+    return 'OpenAI 鉴权失败或 API Key 无效，请检查密钥配置。' + requestSuffix
+  }
+  if (status === 403) {
+    if (/organization|verified|verify/i.test(message)) {
+      return 'OpenAI 当前账号或组织无权调用该生图模型（部分 GPT Image 模型需在 OpenAI 控制台完成组织验证）。' + requestSuffix
+    }
+    return 'OpenAI 鉴权失败或无权调用该模型，请检查密钥与组织权限。' + requestSuffix
+  }
+  if (status === 404 || code === 'model_not_found') {
+    return `OpenAI 模型 ${model} 不存在或当前账号暂不可用，请切换其他模型。` + requestSuffix
+  }
+  if (code === 'insufficient_quota' || code === 'billing_hard_limit_reached') {
+    return 'OpenAI 账号余额或配额不足，请检查结算与额度后再试。' + requestSuffix
+  }
+  if (status === 429 || code === 'rate_limit_exceeded') {
+    return 'OpenAI 触发速率限制或配额不足，请稍后再试。' + requestSuffix
+  }
+  if (OPENAI_MODERATION_CODES.has(code)) {
+    return '提示词或生成结果未通过 OpenAI 内容安全审核，请调整后重试。' + requestSuffix
+  }
+  if (status === 400 && /country|region|territory|unsupported_country/i.test(message)) {
+    return '当前网络出口地区不支持调用 OpenAI，请切换代理或在设置中填写自定义 API 地址。' + requestSuffix
+  }
+  const details = [
+    code && `错误码：${code}`,
+    type && `类型：${type}`,
+    message && `原因：${message}`,
+    requestId && `请求 ID：${requestId}`,
+  ].filter(Boolean).join('；')
+  return `OpenAI ${subject}生成失败（HTTP ${status}）${details ? `：${details}` : '，请重试。'}`
+}
+
+async function downloadOpenAIImageUrl(url, subject, requestSuffix, fetchImpl) {
+  const imageUrl = URL.canParse(url) ? new URL(url) : null
+  if (imageUrl?.protocol !== 'https:' || imageUrl.username || imageUrl.password) {
+    throw new Error(`OpenAI 返回了无效的 HTTPS ${subject}地址。${requestSuffix}`)
+  }
+  const imageRes = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(60_000) })
+  if (!imageRes.ok || !imageRes.body) {
+    await imageRes.body?.cancel().catch(() => {})
+    throw new Error(`OpenAI ${subject}下载失败，请重试。${requestSuffix}`)
+  }
+  const tooLarge = () => new Error(`OpenAI ${subject}超过 24 MB，试试降低分辨率。${requestSuffix}`)
+  if (Number(imageRes.headers?.get?.('content-length')) > MAX_IMAGE) {
+    await imageRes.body.cancel().catch(() => {})
+    throw tooLarge()
+  }
+  const chunks = []
+  let size = 0
+  for await (const chunk of imageRes.body) {
+    size += chunk.byteLength
+    if (size > MAX_IMAGE) throw tooLarge()
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks, size)
+}
+
+export async function generateOpenAICover(
+  prompt,
+  { apiKey, model, resolution = '2K', format = 'png', referenceImage = null, baseUrl = '', size: explicitSize, subject = '封面' },
+  fetchImpl = fetch,
+) {
+  const base = normalizeOpenAIBaseUrl(baseUrl)
+  const hasRef = Boolean(referenceImage)
+  const endpoint = `${base}/images/${hasRef ? 'edits' : 'generations'}`
+  const size = OPENAI_FIXED_SIZE_MODELS.has(model)
+    ? OPENAI_LEGACY_LANDSCAPE_SIZE
+    : (explicitSize ?? OPENAI_SIZES[resolution] ?? OPENAI_SIZES['2K'])
+
+  let init
+  if (hasRef) {
+    const ref = await loadReferenceImage(referenceImage, fetchImpl)
+    const ext = ref.mimeType === 'image/jpeg' ? 'jpg' : ref.mimeType === 'image/webp' ? 'webp' : 'png'
+    const form = new FormData()
+    form.set('model', model)
+    form.set('prompt', prompt)
+    form.set('n', '1')
+    form.set('size', size)
+    form.set('output_format', format)
+    form.set('background', 'opaque')
+    form.append('image', new Blob([ref.buffer], { type: ref.mimeType }), `reference.${ext}`)
+    init = {
+      method: 'POST',
+      redirect: 'error',
+      signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
+      headers: { authorization: `Bearer ${apiKey}` },
+      body: form,
+    }
+  } else {
+    init = {
+      method: 'POST',
+      redirect: 'error',
+      signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
+      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        n: 1,
+        size,
+        output_format: format,
+        background: 'opaque',
+      }),
+    }
+  }
+
+  const res = await fetchImpl(endpoint, init)
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    const requestId = openaiRequestId(body, res, apiKey)
+    throw new Error(openaiErrorMessage({ status: res.status, body, model, requestId, apiKey, subject }))
+  }
+  const body = await res.json().catch(() => null)
+  const requestId = openaiRequestId(body, res, apiKey)
+  const requestSuffix = requestId ? ` 请求 ID：${requestId}` : ''
+  if (!body || typeof body !== 'object') {
+    throw new Error(`OpenAI 返回了无效响应，无法保存${subject}。${requestSuffix}`)
+  }
+  const first = body.data?.[0]
+  let raw
+  if (typeof first?.b64_json === 'string' && first.b64_json.trim()) {
+    const normalized = first.b64_json.trim()
+    if (normalized.length > MAX_B64_CHARS) {
+      throw new Error(`OpenAI ${subject}超过 24 MB，试试降低分辨率。${requestSuffix}`)
+    }
+    raw = Buffer.from(normalized, 'base64')
+    if (!raw.length) throw new Error(`OpenAI 未返回可保存的${subject}。${requestSuffix}`)
+    if (raw.length > MAX_IMAGE) {
+      throw new Error(`OpenAI ${subject}超过 24 MB，试试降低分辨率。${requestSuffix}`)
+    }
+  } else if (typeof first?.url === 'string' && first.url.trim()) {
+    raw = await downloadOpenAIImageUrl(first.url.trim(), subject, requestSuffix, fetchImpl)
+  } else {
+    throw new Error(`OpenAI 未返回可保存的${subject}。${requestSuffix}`)
+  }
+  try {
+    const { normalizeImageFormat } = await import('../dist/image-crop.mjs')
+    return normalizeImageFormat(raw, format)
+  } catch {
+    throw new Error(`OpenAI 返回了无法解析的${subject}格式。${requestSuffix}`)
+  }
+}
+
 export async function generateCoverImage(provider, prompt, options, fetchImpl = fetch) {
   if (provider === 'ark') return generateArkCover(prompt, options, fetchImpl)
   if (provider === 'bailian') return generateBailianCover(prompt, options, fetchImpl)
   if (provider === 'minimax') return generateMinimaxCover(prompt, options, fetchImpl)
   if (provider === 'gemini') return generateGeminiCover(prompt, options, fetchImpl)
+  if (provider === 'openai') return generateOpenAICover(prompt, options, fetchImpl)
   throw Object.assign(new Error('请选择有效的生图提供方。'), { status: 400 })
 }
 

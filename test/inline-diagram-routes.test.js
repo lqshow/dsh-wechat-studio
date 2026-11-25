@@ -616,3 +616,33 @@ test('正文插图路由支持 Google Gemini：缺 Key 拦截、自定义 Base U
   assert.equal(current.inlineDiagrams[0].provider, 'gemini')
   assert.equal(current.inlineDiagrams[0].model, 'gemini-3.1-flash-image')
 })
+
+test('正文插图路由支持 OpenAI：缺 Key 拦截、自定义 Base URL 透传与正常生成', async () => {
+  const { default: jpegJs } = await import('jpeg-js')
+  const jpeg = jpegJs.encode({ data: Buffer.from([255, 0, 0, 255]), width: 1, height: 1 }, 90).data
+  const calls = []
+  const { store, article, request, wait } = await setup({
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init })
+      return Response.json({ data: [{ b64_json: jpeg.toString('base64') }] })
+    },
+  })
+  await updateSettings(store.root, { coverProvider: 'openai', openaiKey: '' })
+  const missing = await request('inline-diagrams/generate', { id: article.id, diagramId: 'diagram-1', style: 'notebook' })
+  assert.match(missing.error, /OpenAI API Key/)
+
+  await updateSettings(store.root, {
+    coverProvider: 'openai',
+    openaiKey: 'sk-openai-inline-route',
+    openaiModel: 'gpt-image-2.6-flare',
+    openaiBaseUrl: 'https://relay.example.com/openai/v1/',
+  })
+  const started = await request('inline-diagrams/generate', { id: article.id, diagramId: 'diagram-1', style: 'notebook' })
+  assert.ok(!started.error, started.error)
+  const current = await wait()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://relay.example.com/openai/v1/images/generations')
+  assert.equal(current.inlineDiagrams[0].status, 'generated')
+  assert.equal(current.inlineDiagrams[0].provider, 'openai')
+  assert.equal(current.inlineDiagrams[0].model, 'gpt-image-2.6-flare')
+})

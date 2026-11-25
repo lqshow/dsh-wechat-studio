@@ -36,7 +36,8 @@ export async function generateInlineImage(diagram, { style, provider, model, api
   const options = {
     apiKey, model, referenceImage: null, format: 'png', resolution: INLINE_IMAGE_SIZES[provider],
     size: INLINE_IMAGE_SIZES[provider], subject: '插图',
-    ...(provider === 'gemini' ? { baseUrl, aspectRatio: '16:9' } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(provider === 'gemini' ? { aspectRatio: '16:9' } : {}),
   }
   return generateCoverImage(provider, prompt, options, fetchImpl)
 }

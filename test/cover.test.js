@@ -8,8 +8,8 @@ import { deflateSync } from 'node:zlib'
 import { createArticle } from '../src/article.js'
 import { callModel, COVER_SKILL_DIR } from '../src/ai.js'
 import { buildCoverPromptRequest } from '../src/cover-prompt.js'
-import { coverDownloadName, generateArkCover, generateBailianCover, generateCoverImage, generateGeminiCover, generateMinimaxCover, normalizeGeminiBaseUrl, readCover, saveCover } from '../src/cover.js'
-import { BAILIAN_SIZES, COVER_PROVIDERS, GEMINI_DEFAULT_BASE_URL, INLINE_IMAGE_SIZES, MINIMAX_SIZES, modelsFor, providerFormats, providerMeta } from '../src/cover-options.js'
+import { coverDownloadName, generateArkCover, generateBailianCover, generateCoverImage, generateGeminiCover, generateMinimaxCover, generateOpenAICover, normalizeGeminiBaseUrl, normalizeOpenAIBaseUrl, readCover, saveCover } from '../src/cover.js'
+import { BAILIAN_SIZES, COVER_PROVIDERS, GEMINI_DEFAULT_BASE_URL, INLINE_IMAGE_SIZES, MINIMAX_SIZES, OPENAI_DEFAULT_BASE_URL, OPENAI_LEGACY_LANDSCAPE_SIZE, OPENAI_SIZES, modelsFor, providerFormats, providerMeta } from '../src/cover-options.js'
 import { normalizeImageFormat } from '../src/image-crop.js'
 import { COVER_STYLES, CUSTOM_COVER_STYLE_LIMITS, extractTemplateSlots, hasPortraitMarkers, isCustomStyleId, resolveCoverStyleName } from '../src/cover-styles.js'
 import { PNG } from 'pngjs'
@@ -852,6 +852,204 @@ test('Gemini 设置：持久化脱敏、Base URL 规范化与非法值拦截', a
   assert.equal(calls[0].url, 'https://relay.example.com/v1beta/models/gemini-3-pro-image:generateContent')
   assert.equal(after.cover.provider, 'gemini')
   assert.equal(after.cover.model, 'gemini-3-pro-image')
+  assert.equal(after.cover.format, 'jpeg')
+  assert.equal(after.cover.baseUrl, undefined, 'baseUrl 不应写入文章封面记录')
+})
+
+test('OpenAI（GPT Image）：选项约束、Base URL 规范化、文生图、参考图编辑、格式转码与错误映射', async () => {
+  // cover-options 契约
+  assert.ok(COVER_PROVIDERS.some(p => p.id === 'openai'))
+  assert.deepEqual(
+    modelsFor('openai').map(m => m.id),
+    ['gpt-image-2.6-sunburst', 'gpt-image-2.6-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2', 'gpt-image-1.5'],
+  )
+  assert.deepEqual(providerFormats('openai'), ['png', 'jpeg'])
+  assert.equal(INLINE_IMAGE_SIZES.openai, '2048x1152')
+  assert.equal(providerMeta('openai').baseUrlField, 'openaiBaseUrl')
+  assert.equal(providerMeta('openai').baseUrlEnvKey, 'OPENAI_BASE_URL')
+  for (const [resKey, dim] of Object.entries(OPENAI_SIZES)) {
+    const [w, h] = dim.split('x').map(Number)
+    assert.equal(w % 16, 0, `${resKey} 宽度必须是 16 的倍数`)
+    assert.equal(h % 16, 0, `${resKey} 高度必须是 16 的倍数`)
+    assert.equal(w * 20, h * 47, `${resKey} 必须严格匹配 47:20`)
+    assert.ok(w * h >= 655_360 && w * h <= 8_294_400, `${resKey} 面积在 OpenAI 限制内`)
+    assert.ok(Math.max(w, h) <= 3840, `${resKey} 最长边不超过 3840`)
+  }
+
+  // normalizeOpenAIBaseUrl
+  assert.equal(normalizeOpenAIBaseUrl(''), OPENAI_DEFAULT_BASE_URL)
+  assert.equal(normalizeOpenAIBaseUrl('  https://api.openai.com  '), 'https://api.openai.com/v1')
+  assert.equal(normalizeOpenAIBaseUrl('https://api.openai.com/v1/'), 'https://api.openai.com/v1')
+  assert.equal(normalizeOpenAIBaseUrl('https://relay.example.com'), 'https://relay.example.com/v1')
+  assert.equal(normalizeOpenAIBaseUrl('https://relay.example.com/openai/v1/'), 'https://relay.example.com/openai/v1')
+  assert.equal(normalizeOpenAIBaseUrl('https://relay.example.com/custom-gw/'), 'https://relay.example.com/custom-gw')
+  assert.equal(normalizeOpenAIBaseUrl('https://relay.example.com/v1/images/generations'), 'https://relay.example.com/v1')
+  assert.equal(normalizeOpenAIBaseUrl('https://relay.example.com/v1/images/edits'), 'https://relay.example.com/v1')
+  assert.throws(() => normalizeOpenAIBaseUrl('http://relay.example.com/v1'), err => err.status === 400 && /https/i.test(err.message))
+  assert.throws(() => normalizeOpenAIBaseUrl('https://u:p@relay.example.com/v1'), err => err.status === 400)
+
+  const png = makePng(94, 40)
+  const jpeg = normalizeImageFormat(png, 'jpeg')
+  const calls = []
+  const okFetch = buf => async (url, init) => {
+    calls.push({ url, init })
+    return Response.json({ data: [{ b64_json: buf.toString('base64') }] })
+  }
+
+  // 1. 默认官方地址 + JSON /images/generations + 精确 47:20 尺寸 + 不传废弃的 response_format + JPEG 自动转 PNG
+  const outPng = await generateOpenAICover('画一张封面', {
+    apiKey: 'sk-openai-secret-123',
+    model: 'gpt-image-2.6-sunburst',
+    resolution: '1.5K',
+    format: 'png',
+  }, okFetch(jpeg))
+  assert.equal(outPng.toString('hex', 0, 8), '89504e470d0a1a0a')
+  assert.equal(calls[0].url, 'https://api.openai.com/v1/images/generations')
+  assert.equal(calls[0].init.headers.authorization, 'Bearer sk-openai-secret-123')
+  assert.equal(calls[0].init.headers['content-type'], 'application/json')
+  assert.equal(calls[0].init.redirect, 'error')
+  const body0 = JSON.parse(calls[0].init.body)
+  assert.deepEqual(body0, {
+    model: 'gpt-image-2.6-sunburst',
+    prompt: '画一张封面',
+    n: 1,
+    size: '2256x960',
+    output_format: 'png',
+    background: 'opaque',
+  })
+
+  // 2. 自定义 Base URL + gpt-image-1.5 自动回退 1536x1024 + PNG 自动转 JPEG + generateCoverImage 分发
+  calls.length = 0
+  const outJpeg = await generateCoverImage('openai', '封面2', {
+    apiKey: 'sk-openai-secret-123',
+    model: 'gpt-image-1.5',
+    resolution: '2K',
+    format: 'jpeg',
+    baseUrl: 'https://relay.example.com/openai/v1/',
+  }, okFetch(png))
+  assert.equal(outJpeg.toString('hex', 0, 3), 'ffd8ff')
+  assert.equal(calls[0].url, 'https://relay.example.com/openai/v1/images/generations')
+  assert.equal(JSON.parse(calls[0].init.body).size, OPENAI_LEGACY_LANDSCAPE_SIZE)
+  assert.equal(JSON.parse(calls[0].init.body).output_format, 'jpeg')
+
+  // 3. 参考图（data: URL）走 multipart/form-data /images/edits，不发额外下载请求
+  calls.length = 0
+  await generateOpenAICover('按参考图编辑', {
+    apiKey: 'sk-openai-secret-123',
+    model: 'gpt-image-2.6-flare',
+    resolution: '1K',
+    format: 'png',
+    referenceImage: `data:image/png;base64,${png.toString('base64')}`,
+  }, okFetch(png))
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://api.openai.com/v1/images/edits')
+  assert.equal(calls[0].init.headers['content-type'], undefined, 'multipart 请求不能手写 content-type 覆盖 boundary')
+  assert.ok(calls[0].init.body instanceof FormData)
+  assert.equal(calls[0].init.body.get('model'), 'gpt-image-2.6-flare')
+  assert.equal(calls[0].init.body.get('size'), '1504x640')
+  assert.equal(calls[0].init.body.get('output_format'), 'png')
+  assert.equal(calls[0].init.body.get('background'), 'opaque')
+  const uploaded = calls[0].init.body.get('image')
+  assert.ok(uploaded instanceof Blob)
+  assert.equal(uploaded.type, 'image/png')
+  assert.equal(uploaded.name, 'reference.png')
+
+  // 4. 参考图（https:// URL）先下载再走 /images/edits，兼容中转返回的 https url
+  calls.length = 0
+  const refAndUrlFetch = async (url, init) => {
+    calls.push({ url, init })
+    if (url === 'https://example.com/me.jpg') {
+      return new Response(jpeg, { status: 200, headers: { 'content-type': 'image/jpeg' } })
+    }
+    if (url === 'https://cdn.example.com/out.png') {
+      return new Response(png, { status: 200, headers: { 'content-type': 'image/png' } })
+    }
+    return Response.json({ data: [{ url: 'https://cdn.example.com/out.png' }] })
+  }
+  const fromUrl = await generateOpenAICover('人物封面', {
+    apiKey: 'sk-openai-secret-123',
+    model: 'gpt-image-2',
+    resolution: '2K',
+    format: 'png',
+    referenceImage: 'https://example.com/me.jpg',
+  }, refAndUrlFetch)
+  assert.equal(fromUrl.toString('hex', 0, 8), '89504e470d0a1a0a')
+  assert.equal(calls.length, 3)
+  assert.equal(calls[0].url, 'https://example.com/me.jpg')
+  assert.equal(calls[1].url, 'https://api.openai.com/v1/images/edits')
+  assert.equal(calls[1].init.body.get('image').type, 'image/jpeg')
+  assert.equal(calls[1].init.body.get('image').name, 'reference.jpg')
+  assert.equal(calls[2].url, 'https://cdn.example.com/out.png')
+
+  // 5. 错误映射、请求 ID 与密钥脱敏
+  const errReply = (status, body, headers = {}) => async () => Response.json(body, { status, headers })
+  const baseOpts = { apiKey: 'sk-leak-openai-999', model: 'gpt-image-2.6-sunburst', resolution: '2K', format: 'png' }
+  await assert.rejects(generateOpenAICover('p', baseOpts, errReply(401, { error: { code: 'invalid_api_key', message: 'Invalid key' } }, { 'x-request-id': 'req_401' })), /鉴权失败.*req_401/)
+  await assert.rejects(generateOpenAICover('p', baseOpts, errReply(403, { error: { message: 'Your organization must be verified to use the model.' } })), /组织验证/)
+  await assert.rejects(generateOpenAICover('p', baseOpts, errReply(403, { error: { message: 'Access denied' } })), /无权调用该模型/)
+  await assert.rejects(generateOpenAICover('p', baseOpts, errReply(404, { error: { code: 'model_not_found', message: 'No such model' } })), /不存在|暂不可用/)
+  await assert.rejects(generateOpenAICover('p', baseOpts, errReply(429, { error: { code: 'insufficient_quota', message: 'Quota' } })), /余额或配额不足/)
+  await assert.rejects(generateOpenAICover('p', baseOpts, errReply(429, { error: { code: 'rate_limit_exceeded', message: 'Slow down' } })), /速率限制/)
+  await assert.rejects(generateOpenAICover('p', baseOpts, errReply(400, { error: { code: 'moderation_blocked', message: 'Blocked' } })), /内容安全审核/)
+  await assert.rejects(generateOpenAICover('p', baseOpts, errReply(400, { error: { message: 'Country, region, or territory not supported' } })), /地区.*自定义 API 地址/)
+  await assert.rejects(
+    generateOpenAICover('p', baseOpts, errReply(500, { error: { message: 'boom sk-leak-openai-999 Bearer sk-leak-openai-999' } }, { 'x-request-id': 'req_500' })),
+    err => /HTTP 500/.test(err.message) && /req_500/.test(err.message) && !err.message.includes('sk-leak-openai-999'),
+  )
+  await assert.rejects(generateOpenAICover('p', baseOpts, errReply(200, { data: [{}] })), /未返回可保存的封面/)
+})
+
+test('OpenAI 设置：持久化脱敏、Base URL 规范化、非法值拦截与封面路由', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ws-openai-settings-'))
+  const def = await readSettings(root)
+  assert.equal(def.openaiModel, 'gpt-image-2.6-sunburst')
+  assert.equal(def.openaiKey, '')
+  assert.equal(def.openaiBaseUrl, '')
+
+  const updated = await updateSettings(root, {
+    coverProvider: 'openai',
+    openaiModel: 'gpt-image-2.6-flare',
+    openaiKey: '  sk-openai-secret-8888  ',
+    openaiBaseUrl: '  https://relay.example.com/  ',
+  })
+  const pub = publicSettings(updated)
+  assert.equal(pub.coverProvider, 'openai')
+  assert.equal(pub.openaiModel, 'gpt-image-2.6-flare')
+  assert.equal(pub.openaiKeySet, true)
+  assert.equal(pub.openaiBaseUrl, 'https://relay.example.com/v1')
+  assert.ok(!JSON.stringify(pub).includes('sk-openai-secret-8888'))
+  const reread = await readSettings(root)
+  assert.equal(reread.openaiKey, 'sk-openai-secret-8888')
+  assert.equal(reread.openaiBaseUrl, 'https://relay.example.com/v1')
+
+  const cleared = publicSettings(await updateSettings(root, { openaiBaseUrl: '' }))
+  assert.equal(cleared.openaiBaseUrl, '')
+
+  await assert.rejects(updateSettings(root, { openaiModel: modelsFor('ark')[0].id }), /OpenAI 封面模型/)
+  await assert.rejects(updateSettings(root, { openaiBaseUrl: 'http://insecure.example.com/v1' }), /https/i)
+  await assert.rejects(updateSettings(root, { openaiBaseUrl: 'https://u:p@relay.example.com/v1' }), /账号密码|https/i)
+
+  const noKey = await coverHost({ provider: 'openai', key: '' })
+  assert.match((await noKey.request('cover/generate', { id: noKey.article.id, style: 'classic', format: 'png' })).error, /OpenAI API Key/)
+
+  const png = makePng(94, 40)
+  const calls = []
+  const host = await coverHost({
+    provider: 'openai',
+    key: 'sk-openai-route',
+    model: 'gpt-image-2.6-flare',
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init })
+      return Response.json({ data: [{ b64_json: png.toString('base64') }] })
+    },
+    llm: await coverLLM('classic'),
+  })
+  await updateSettings(host.store.root, { openaiBaseUrl: 'https://relay.example.com/openai/v1/' })
+  await host.request('cover/generate', { id: host.article.id, style: 'classic', resolution: '2K', count: 1, format: 'jpeg' })
+  const after = await waitCover(host.request)
+  assert.equal(calls[0].url, 'https://relay.example.com/openai/v1/images/generations')
+  assert.equal(after.cover.provider, 'openai')
+  assert.equal(after.cover.model, 'gpt-image-2.6-flare')
   assert.equal(after.cover.format, 'jpeg')
   assert.equal(after.cover.baseUrl, undefined, 'baseUrl 不应写入文章封面记录')
 })

@@ -1,10 +1,12 @@
 export const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com'
+export const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 
 export const COVER_PROVIDERS = [
   { id: 'ark', name: '火山方舟' },
   { id: 'bailian', name: '阿里云百炼' },
   { id: 'minimax', name: 'MiniMax' },
   { id: 'gemini', name: 'Google Gemini' },
+  { id: 'openai', name: 'OpenAI' },
 ]
 
 export const COVER_MODELS = [
@@ -18,6 +20,12 @@ export const COVER_MODELS = [
   { id: 'gemini-nano-banana-2.1', name: 'Nano Banana 2.1', provider: 'gemini' },
   { id: 'gemini-3.1-flash-image', name: 'Nano Banana 2', provider: 'gemini' },
   { id: 'gemini-3-pro-image', name: 'Nano Banana Pro', provider: 'gemini' },
+  { id: 'gpt-image-2.6-sunburst', name: 'GPT Image 2.6 Sunburst', provider: 'openai' },
+  { id: 'gpt-image-2.6-flare', name: 'GPT Image 2.6 Flare', provider: 'openai' },
+  { id: 'gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst', provider: 'openai' },
+  { id: 'gpt-image-2.5-flare', name: 'GPT Image 2.5 Flare', provider: 'openai' },
+  { id: 'gpt-image-2', name: 'GPT Image 2', provider: 'openai' },
+  { id: 'gpt-image-1.5', name: 'GPT Image 1.5', provider: 'openai' },
 ]
 
 export const COVER_PROVIDER_META = {
@@ -74,6 +82,7 @@ export const COVER_PROVIDER_META = {
     keyField: 'geminiKey',
     keySetField: 'geminiKeySet',
     baseUrlField: 'geminiBaseUrl',
+    baseUrlEnvKey: ['GEMINI', 'BASE', 'URL'].join('_'),
     defaultBaseUrl: GEMINI_DEFAULT_BASE_URL,
     envKey: ['GEMINI', 'API', 'KEY'].join('_'),
     description: '配置 Google Gemini（Nano Banana）的生图模型和凭证。',
@@ -82,6 +91,24 @@ export const COVER_PROVIDER_META = {
     keyPlaceholder: '输入 Google Gemini API Key',
     missingKeyError: '请先在设置中填写 Google Gemini API Key。',
     hint: '需要 Google AI Studio 付费层级（Tier 1+）API Key，支持 PNG 和 JPEG；如国内网络直连受限，可填写自定义 API 地址。',
+  },
+  openai: {
+    id: 'openai',
+    name: 'OpenAI',
+    subtitle: 'GPT Image',
+    modelField: 'openaiModel',
+    keyField: 'openaiKey',
+    keySetField: 'openaiKeySet',
+    baseUrlField: 'openaiBaseUrl',
+    baseUrlEnvKey: ['OPENAI', 'BASE', 'URL'].join('_'),
+    defaultBaseUrl: OPENAI_DEFAULT_BASE_URL,
+    envKey: ['OPENAI', 'API', 'KEY'].join('_'),
+    description: '配置 OpenAI（GPT Image）的生图模型和凭证。',
+    link: 'https://platform.openai.com/api-keys',
+    linkLabel: 'OpenAI API Keys',
+    keyPlaceholder: '输入 OpenAI API Key',
+    missingKeyError: '请先在设置中填写 OpenAI API Key。',
+    hint: '使用官方 OpenAI Platform API Key（不依赖 ChatGPT 订阅登录），支持 PNG 和 JPEG；如国内网络直连受限或使用兼容中转，可填写自定义 API 地址。',
   },
 }
 
@@ -98,5 +125,9 @@ export const BAILIAN_SIZES = { '1K': '1504*640', '1.5K': '1880*800', '2K': '2048
 // MiniMax H3 支持精确宽x高（面积 655,360 ~ 20,000,000，宽高比 1:3 ~ 3:1）。
 // 三档分别取 32 / 48 / 64 倍 47:20，严格匹配公众号封面比例且避开二次裁切与重编码。
 export const MINIMAX_SIZES = { '1K': '1504x640', '1.5K': '2256x960', '2K': '3008x1280' }
-export const INLINE_IMAGE_SIZES = { ark: '2048x1152', bailian: '2048*1152', minimax: '2048x1152', gemini: '2K' }
+// OpenAI GPT Image 2 / 2.5 / 2.6 支持 16 的倍数自定义宽高（面积 655,360 ~ 8,294,400，最长边 <= 3840，比例 1:3 ~ 3:1）；
+// gpt-image-1.5 仅支持固定尺寸，请求时自动回退至横版 1536x1024 并由 saveCover 中心裁切至 47:20。
+export const OPENAI_SIZES = { '1K': '1504x640', '1.5K': '2256x960', '2K': '3008x1280' }
+export const OPENAI_LEGACY_LANDSCAPE_SIZE = '1536x1024'
+export const INLINE_IMAGE_SIZES = { ark: '2048x1152', bailian: '2048*1152', minimax: '2048x1152', gemini: '2K', openai: '2048x1152' }
 export const providerFormats = provider => (provider === 'bailian' ? ['png'] : COVER_FORMATS)

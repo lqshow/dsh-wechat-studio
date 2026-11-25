@@ -688,6 +688,32 @@ test('previewCustomCoverStyle：分阶段回调、usePortrait 透传肖像照、
   assert.equal(geminiRes.provider, 'gemini')
   const geminiDraft = await readDraftPreview(root, geminiRes.draftToken)
   assert.equal(geminiDraft.contentType, 'image/png')
+
+  // OpenAI 试生成透传 openaiBaseUrl 与样式参考图（multipart/form-data -> /images/edits）
+  const openaiCalls = []
+  const openaiFetch = async (url, init) => {
+    openaiCalls.push({ url, init })
+    return Response.json({ data: [{ b64_json: png.toString('base64') }] })
+  }
+  const llmCtx5 = mockLlmCtx({ replies: [{ values: ['标题', '视觉'] }] })
+  const openaiRes = await previewCustomCoverStyle(llmCtx5, root, {
+    ...settings,
+    coverProvider: 'openai',
+    openaiModel: 'gpt-image-2.6-sunburst',
+    openaiKey: 'sk-openai-custom-style',
+    openaiBaseUrl: 'https://relay.example.com/',
+  }, {
+    draft: { template: '21:9 标题 {{主标题}}，视觉 {{视觉}}', guidance: '', usePortrait: false, useStyleReference: true },
+    styleReferenceImage: `data:image/png;base64,${png.toString('base64')}`,
+    testTitle: 'OpenAI 样图',
+  }, openaiFetch)
+  assert.equal(openaiCalls.length, 1)
+  assert.equal(openaiCalls[0].url, 'https://relay.example.com/v1/images/edits')
+  assert.ok(openaiCalls[0].init.body instanceof FormData)
+  assert.equal(openaiCalls[0].init.body.get('image').type, 'image/png')
+  assert.equal(openaiRes.provider, 'openai')
+  const openaiDraft = await readDraftPreview(root, openaiRes.draftToken)
+  assert.equal(openaiDraft.contentType, 'image/png')
 })
 
 test('coverPrompt：自定义风格中的 {{人物段}} 不受内置 felt 枚举约束', async () => {

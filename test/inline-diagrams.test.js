@@ -229,6 +229,39 @@ test('正文插图支持 Google Gemini：16:9 比例、自定义 Base URL 透传
   assert.equal(image.toString('hex', 0, 8), '89504e470d0a1a0a', '插图必须输出有效 PNG')
 })
 
+test('正文插图支持 OpenAI：2048x1152 尺寸、自定义 Base URL 透传、gpt-image-1.5 尺寸回退与 JPEG 转 PNG', async () => {
+  const { default: jpegJs } = await import('jpeg-js')
+  const jpeg = jpegJs.encode({ data: Buffer.from([255, 0, 0, 255]), width: 1, height: 1 }, 90).data
+  const calls = []
+  const image = await generateInlineImage(diagram, {
+    style: 'notebook',
+    provider: 'openai',
+    model: 'gpt-image-2.6-sunburst',
+    apiKey: 'sk-openai-inline',
+    baseUrl: 'https://relay.example.com/openai/v1/',
+  }, async (url, init) => {
+    calls.push({ url, init })
+    return Response.json({ data: [{ b64_json: jpeg.toString('base64') }] })
+  })
+  assert.equal(calls[0].url, 'https://relay.example.com/openai/v1/images/generations')
+  assert.equal(JSON.parse(calls[0].init.body).size, '2048x1152')
+  assert.equal(JSON.parse(calls[0].init.body).output_format, 'png')
+  assert.equal(image.toString('hex', 0, 8), '89504e470d0a1a0a', '插图必须输出有效 PNG')
+
+  calls.length = 0
+  await generateInlineImage(diagram, {
+    style: 'notebook',
+    provider: 'openai',
+    model: 'gpt-image-1.5',
+    apiKey: 'sk-openai-inline',
+  }, async (url, init) => {
+    calls.push({ url, init })
+    return Response.json({ data: [{ b64_json: PNG.toString('base64') }] })
+  })
+  assert.equal(calls[0].url, 'https://api.openai.com/v1/images/generations')
+  assert.equal(JSON.parse(calls[0].init.body).size, '1536x1024')
+})
+
 test('插图资产原样保存为 UUID PNG，拒绝跨稿读取', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ws-inline-asset-'))
   const assetId = await saveInlineImage(root, PNG)

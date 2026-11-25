@@ -53,8 +53,8 @@ const VALUE_FLAGS = new Set([
   '--data-dir', '--style', '--theme', '--banner', '--out', '--title', '--line', '--lines-file',
   '--range', '--key', '--endpoint', '--resolution', '--format', '--provider',
   '--prompt-file', '--note', '--topic', '--model', '--base-url',
-  '--author', '--slogan', '--cover-provider', '--ark-model', '--bailian-model', '--minimax-model', '--gemini-model', '--portrait-url',
-  '--zhuque-key', '--zhuque-endpoint', '--ark-key', '--bailian-key', '--minimax-key', '--gemini-key', '--gemini-base-url',
+  '--author', '--slogan', '--cover-provider', '--ark-model', '--bailian-model', '--minimax-model', '--gemini-model', '--openai-model', '--portrait-url',
+  '--zhuque-key', '--zhuque-endpoint', '--ark-key', '--bailian-key', '--minimax-key', '--gemini-key', '--gemini-base-url', '--openai-key', '--openai-base-url',
   '--mp-name', '--mp-app-id', '--mp-app-secret', '--from-json', '--preflight-words',
   '--app-id', '--app-secret', '--cover', '--avatar', '--target', '--variant',
 ])
@@ -169,12 +169,13 @@ const SUB_HELP = {
   --theme <id>                         默认配色主题（${THEMES.join(', ')}）
   --cover-provider <${COVER_PROVIDERS.map(p => p.id).join('|')}>
                                        默认封面生图提供方
-  --ark-model <id> / --bailian-model <id> / --minimax-model <id> / --gemini-model <id>
+  --ark-model <id> / --bailian-model <id> / --minimax-model <id> / --gemini-model <id> / --openai-model <id>
                                        默认封面生图模型
   --portrait-url <https://...|"">      封面人物参考图地址（传空字符串清除）
-  --zhuque-key / --ark-key / --bailian-key / --minimax-key / --gemini-key <key>
+  --zhuque-key / --ark-key / --bailian-key / --minimax-key / --gemini-key / --openai-key <key>
                                        保存对应服务密钥（传空字符串清除）
   --gemini-base-url <https://...|"">   Google Gemini 自定义 API 地址（选填，传空字符串恢复官方地址）
+  --openai-base-url <https://...|"">   OpenAI 自定义 API 地址（选填，传空字符串恢复官方地址）
   --mp-name / --mp-app-id / --mp-app-secret <val>
                                        保存公众号名称、AppID、AppSecret
   --preflight-words <词1,词2>          发布体检自定义提醒词（逗号分隔，传空字符串清空）
@@ -709,7 +710,9 @@ async function handleCover(argv, io, secrets) {
     throw new UsageError(`缺少 ${provider} 生图 API Key，请设置环境变量 ${meta.envKey} 或在工作区设置中保存。`)
   }
   const model = settings[meta.modelField]
-  const baseUrl = meta.baseUrlField ? String(io.env.GEMINI_BASE_URL ?? settings[meta.baseUrlField] ?? '').trim() : ''
+  const baseUrl = meta.baseUrlField
+    ? String((meta.baseUrlEnvKey ? io.env[meta.baseUrlEnvKey] : undefined) ?? settings[meta.baseUrlField] ?? '').trim()
+    : ''
   const rawImage = await generateCoverImage(provider, prompt, {
     apiKey, model, resolution: values.resolution, format: values.format, referenceImage, baseUrl,
   }, io.fetchImpl)
@@ -823,7 +826,7 @@ async function handleStyle(argv, io, secrets) {
 }
 
 function collectPatchSecrets(patch, secrets) {
-  for (const v of [patch.zhuqueKey, patch.arkKey, patch.bailianKey, patch.minimaxKey, patch.geminiKey, patch.cloudinary?.apiSecret, patch.mp?.appSecret]) {
+  for (const v of [patch.zhuqueKey, patch.arkKey, patch.bailianKey, patch.minimaxKey, patch.geminiKey, patch.openaiKey, patch.cloudinary?.apiSecret, patch.mp?.appSecret]) {
     if (typeof v === 'string' && v.trim()) secrets.push(v.trim())
   }
 }
@@ -833,11 +836,11 @@ function formatSettingsSummary(pub) {
     `作者：${pub.brand.author}`,
     `标语：${pub.brand.slogan}`,
     `默认排版：${pub.style ?? 'std（默认）'} · ${pub.theme ?? 'orange（默认）'}`,
-    `封面提供方：${pub.coverProvider}（ark=${pub.arkModel}，bailian=${pub.bailianModel}，minimax=${pub.minimaxModel}，gemini=${pub.geminiModel}）`,
+    `封面提供方：${pub.coverProvider}（ark=${pub.arkModel}，bailian=${pub.bailianModel}，minimax=${pub.minimaxModel}，gemini=${pub.geminiModel}，openai=${pub.openaiModel}）`,
     `参考图：${pub.portraitUrl || '(未设置)'}`,
     `朱雀质检：${pub.zhuqueKeySet ? `已配置（****${pub.zhuqueKeyTail}）` : '未配置'}`,
     `体检自定义词：${pub.preflightWords?.length ? `${pub.preflightWords.length} 个（${pub.preflightWords.slice(0, 5).join('、')}）` : '未配置'}`,
-    `生图密钥：火山方舟 ${pub.arkKeySet ? '已配置' : '未配置'} / 百炼 ${pub.bailianKeySet ? '已配置' : '未配置'} / MiniMax ${pub.minimaxKeySet ? '已配置' : '未配置'} / Gemini ${pub.geminiKeySet ? '已配置' : '未配置'}`,
+    `生图密钥：火山方舟 ${pub.arkKeySet ? '已配置' : '未配置'} / 百炼 ${pub.bailianKeySet ? '已配置' : '未配置'} / MiniMax ${pub.minimaxKeySet ? '已配置' : '未配置'} / Gemini ${pub.geminiKeySet ? '已配置' : '未配置'} / OpenAI ${pub.openaiKeySet ? '已配置' : '未配置'}`,
     `公众号草稿箱：${pub.mp.appId ? `${pub.mp.name ? `${pub.mp.name} · ` : ''}${pub.mp.appId}（AppSecret ${pub.mp.appSecretSet ? '已配置' : '未配置'}）` : '未配置'}`,
   ].join('\n')
 }
@@ -867,6 +870,7 @@ async function handleSettings(argv, io, secrets) {
       'bailian-model': { type: 'string' },
       'minimax-model': { type: 'string' },
       'gemini-model': { type: 'string' },
+      'openai-model': { type: 'string' },
       'portrait-url': { type: 'string' },
       'zhuque-key': { type: 'string' },
       'zhuque-endpoint': { type: 'string' },
@@ -875,6 +879,8 @@ async function handleSettings(argv, io, secrets) {
       'minimax-key': { type: 'string' },
       'gemini-key': { type: 'string' },
       'gemini-base-url': { type: 'string' },
+      'openai-key': { type: 'string' },
+      'openai-base-url': { type: 'string' },
       'mp-name': { type: 'string' },
       'mp-app-id': { type: 'string' },
       'mp-app-secret': { type: 'string' },
@@ -909,6 +915,7 @@ async function handleSettings(argv, io, secrets) {
     if (values['bailian-model'] !== undefined) patch.bailianModel = values['bailian-model']
     if (values['minimax-model'] !== undefined) patch.minimaxModel = values['minimax-model']
     if (values['gemini-model'] !== undefined) patch.geminiModel = values['gemini-model']
+    if (values['openai-model'] !== undefined) patch.openaiModel = values['openai-model']
     if (values['portrait-url'] !== undefined) patch.portraitUrl = values['portrait-url']
     if (values['zhuque-key'] !== undefined) patch.zhuqueKey = values['zhuque-key']
     if (values['zhuque-endpoint'] !== undefined) patch.zhuqueEndpoint = values['zhuque-endpoint']
@@ -917,6 +924,8 @@ async function handleSettings(argv, io, secrets) {
     if (values['minimax-key'] !== undefined) patch.minimaxKey = values['minimax-key']
     if (values['gemini-key'] !== undefined) patch.geminiKey = values['gemini-key']
     if (values['gemini-base-url'] !== undefined) patch.geminiBaseUrl = values['gemini-base-url']
+    if (values['openai-key'] !== undefined) patch.openaiKey = values['openai-key']
+    if (values['openai-base-url'] !== undefined) patch.openaiBaseUrl = values['openai-base-url']
     if (values['preflight-words'] !== undefined) {
       patch.preflightWords = values['preflight-words'].trim()
         ? values['preflight-words'].split(/[,，\n]/).map(s => s.trim()).filter(Boolean)

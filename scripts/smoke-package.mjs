@@ -59,7 +59,17 @@ try {
   assert.equal(geminiGet.settings.coverProvider, 'gemini')
   assert.equal(geminiGet.settings.geminiModel, 'gemini-3-pro-image')
   assert.equal(geminiGet.settings.geminiBaseUrl, 'https://relay.example.com')
-  console.log('Installed package: exports, version, bundled skills, MiniMax & Gemini settings and offline layout passed')
+  const openaiSet = run('wechat-studio settings set --cover-provider openai --openai-model gpt-image-2.6-flare --openai-base-url https://relay.example.com/openai/v1/ --data-dir data --json')
+  assert.equal(openaiSet.ok, true)
+  assert.equal(openaiSet.settings.coverProvider, 'openai')
+  assert.equal(openaiSet.settings.openaiModel, 'gpt-image-2.6-flare')
+  assert.equal(openaiSet.settings.openaiBaseUrl, 'https://relay.example.com/openai/v1')
+  const openaiGet = run('wechat-studio settings get --data-dir data --json')
+  assert.equal(openaiGet.ok, true)
+  assert.equal(openaiGet.settings.coverProvider, 'openai')
+  assert.equal(openaiGet.settings.openaiModel, 'gpt-image-2.6-flare')
+  assert.equal(openaiGet.settings.openaiBaseUrl, 'https://relay.example.com/openai/v1')
+  console.log('Installed package: exports, version, bundled skills, MiniMax, Gemini & OpenAI settings and offline layout passed')
 } finally {
   await rm(dir, { recursive: true, force: true })
 }

@@ -301,6 +301,7 @@ npm install -g dsh-wechat-studio
 | 阿里云百炼 | 生成封面图和正文插图（通义万相 / 千问图像，仅 PNG） | 在「设置 → 封面生成」选择阿里云百炼，填写中国内地（北京）的 API Key 并选择生图模型。 |
 | MiniMax | 生成封面图和正文插图（MiniMax H3 Image / Highspeed，支持 PNG/JPEG 与人物参考图） | 在「设置 → 封面生成」选择 MiniMax，填写国内开放平台（platform.minimax.cn）的 API Key 并选择生图模型。 |
 | Google Gemini | 生成封面图和正文插图（Nano Banana 2.1 / 2 / Pro，支持 PNG/JPEG 与人物参考图） | 在「设置 → 封面生成」选择 Google Gemini，填写 Google AI Studio 付费层级 API Key 并选择模型；可选填自定义 API 地址。 |
+| OpenAI | 生成封面图和正文插图（GPT Image 2.6 / 2.5 / 2 / 1.5，支持 PNG/JPEG 与人物参考图） | 在「设置 → 生图模型」选择 OpenAI，填写官方 Platform API Key 并选择模型；可选填自定义 API 地址。 |
 | Cloudinary | 转存飞书图片、上传本地图片，并在确认插入正文插图时取得可发表的 HTTPS 地址 | 在「设置 → 图片图床」填写 Cloud Name、API Key 和 API Secret。 |
 
 导入飞书 Markdown 后，图片会在后台转存，成功后正文使用 Cloudinary 的可访问地址。如果失败，可以在稿面重试。飞书链接过期时，请重新从飞书复制 Markdown。编辑正文时也可直接粘贴剪贴板图片，或在「插入 → 图片与图注 / 长图卡」中选择本地 PNG、JPEG、GIF、WebP（不超过 10 MB）；确认插入后上传到 Cloudinary，再写入普通 Markdown 图片。
@@ -340,7 +341,7 @@ an OVERSIZED, RELAXED-FIT heavyweight waffle-knit short-sleeve polo shirt in Mid
 
 从旧版本升级时，首次启动会自动把 `state.json` 迁移到 `articles/` 目录，原文件改名为 `state.json.v1.bak`，无需手动操作。迁移后**不支持降级**：装回旧版本会看到空的稿件列表，旧版本里新写的内容也不会被新版本读取。如果必须回到旧版本，先退出插件，把 `state.json.v1.bak` 改名回 `state.json`；迁移后在新版本里做的修改不会带回去。
 
-未保存的段落文字和上次编辑位置保存在当前宿主的本地存储中。调用模型、朱雀、火山方舟、阿里云百炼、MiniMax、Google Gemini 或 Cloudinary 时，相应任务的数据会发送给所用服务。
+未保存的段落文字和上次编辑位置保存在当前宿主的本地存储中。调用模型、朱雀、火山方舟、阿里云百炼、MiniMax、Google Gemini、OpenAI 或 Cloudinary 时，相应任务的数据会发送给所用服务。
 
 可覆盖的内置技能包括 [写作](skills/writer.md)、[标题](skills/headline.md)、[去 AI 味](skills/humanizer.md)、[朱雀流程](skills/zhuque.md)、[开头横幅](skills/banner.md)、[串推派生](skills/repurpose-thread.md)和[小红书派生](skills/repurpose-xhs.md)。将同名文件放进数据目录的 `skills/`，下一次调用就会读取该版本。
 
