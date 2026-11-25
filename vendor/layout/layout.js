@@ -5,6 +5,7 @@ import { re } from './pyre.js'
 import * as B from './banner.js'
 import { DEFAULT_GALLERY_LABEL, galleryColors, isGalleryOpening, parseGalleryBlock } from '../../src/gallery.js'
 import { parseVideoCardLines, renderVideoCardHtml } from '../../src/video-card.js'
+import { normalizeEndMark, renderEndMarkHtml } from '../../src/end-mark.js'
 
 const theme = (name, main, soft, tint, line, mark) => ({ name, main, soft, tint, line, mark })
 // 15 套配色：main 主色 / soft 浅底 / tint 色块 / line 线条 / mark 荧光笔
@@ -1393,6 +1394,8 @@ function render(md, T, meta, stat = null) {
     para.push(s); i++
   }
   flush()
+  const endMark = normalizeEndMark(get(meta, 'end_mark', 'none'), 'none')
+  if (endMark !== 'none') out.push(renderEndMarkHtml(endMark, T))
   if (get(meta, 'outro', 'true').toLowerCase() !== 'false') out.push(authorCard(T, meta))
   out.push(notesBlock(notes, T))
   const wrap = T.st === 'dark' ? 'padding:26px 18px 30px;background:#0F1218;border-radius:18px;' : 'padding:0 4px;'
@@ -1668,7 +1671,7 @@ const jsonCopy = v => JSON.parse(JSON.stringify(v))
  * @param {{banner?: object, style?: string, theme?: string, studioOptions?: object, outro?: 'true'|'false', brandAuthor?: string, brandSlogan?: string, name?: string}} [options]
  * @returns {{html: string, report: string, filename: string}} 页面、自查报告（原脚本打印的内容）、原脚本会写出的文件名。
  */
-export function renderPage(source, { banner: bannerSpec, style: argStyle, theme: argTheme, studioOptions, outro, brandAuthor, brandSlogan, name = 'article.md' } = {}) {
+export function renderPage(source, { banner: bannerSpec, style: argStyle, theme: argTheme, studioOptions, outro, endMark, brandAuthor, brandSlogan, name = 'article.md' } = {}) {
   WARN = []
   if (!Object.hasOwn(STYLES, argStyle)) argStyle = undefined
   if (!Object.hasOwn(THEMES, argTheme)) argTheme = undefined
@@ -1678,6 +1681,7 @@ export function renderPage(source, { banner: bannerSpec, style: argStyle, theme:
   if (brandSlogan) brand.slogan = brandSlogan
   Object.assign(meta, brand)
   if (outro !== undefined && outro !== null) meta.outro = outro
+  if (endMark !== undefined && endMark !== null) meta.end_mark = normalizeEndMark(endMark, 'none')
   const m = re(String.raw`^#\s+(.+)$`, 'm').search(md)
   const base = name.split(/[\\/]/).pop()
   const dot = base.lastIndexOf('.')
@@ -1762,7 +1766,7 @@ export function renderSvgCard(kind, title, lines, { style = 'std', theme = 'oran
 /**
  * 渲染可直接推送到微信公众号草稿箱的 HTML 片段（与预览页「复制全文 / 推送草稿箱」一致）。
  */
-export function renderFragment(source, { banner: bannerSpec, style: argStyle, theme: argTheme, outro, brandAuthor, brandSlogan, avatarUrl = '', name = 'article.md' } = {}) {
+export function renderFragment(source, { banner: bannerSpec, style: argStyle, theme: argTheme, outro, endMark, brandAuthor, brandSlogan, avatarUrl = '', name = 'article.md' } = {}) {
   WARN = []
   if (!Object.hasOwn(STYLES, argStyle)) argStyle = undefined
   if (!Object.hasOwn(THEMES, argTheme)) argTheme = undefined
@@ -1772,6 +1776,7 @@ export function renderFragment(source, { banner: bannerSpec, style: argStyle, th
   if (brandSlogan) brand.slogan = brandSlogan
   Object.assign(meta, brand)
   if (outro !== undefined && outro !== null) meta.outro = outro
+  if (endMark !== undefined && endMark !== null) meta.end_mark = normalizeEndMark(endMark, 'none')
   const m = re(String.raw`^#\s+(.+)$`, 'm').search(md)
   const base = String(name || '').split(/[\\/]/).pop()
   const dot = base.lastIndexOf('.')

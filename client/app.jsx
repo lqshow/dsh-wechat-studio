@@ -25,6 +25,7 @@ import { AnimatedNumber, scrollBehavior, SlidingTabs, useDialogClose, usePresenc
 import { ScheduleView } from './schedule.jsx'
 import { isSvgCardText, SvgCardBlock, SvgCardsPane } from './svg-cards.jsx'
 import { isVideoCardText, VideoCardBlock, VideoCardInsert } from './video-card.jsx'
+import { END_MARK_STYLES } from '../src/end-mark.js'
 import { WritingStyleCard, WritingStyleWizard } from './writing-style.jsx'
 
 const ICONS = {
@@ -1039,6 +1040,30 @@ function LayoutView({ article, brand, mp }) {
           <button type="button" role="tab" aria-selected={previewMode === 'article'} className={previewMode === 'article' ? 'is-on' : ''} onClick={() => setPreviewMode('article')}>正文预览</button>
           <button type="button" role="tab" aria-selected={previewMode === 'feed'} className={previewMode === 'feed' ? 'is-on' : ''} onClick={() => setPreviewMode('feed')}>信息流卡片</button>
         </SlidingTabs>
+        {previewMode === 'article' ? (
+          <div className="ws-endmark-picker">
+            <span className="ws-endmark-label">文末标识</span>
+            <SlidingTabs activeKey={article.endMark ?? 'horizon'} className="ws-tabs" role="radiogroup" aria-label="文末标识样式">
+              {END_MARK_STYLES.map(item => {
+                const active = (article.endMark ?? 'horizon') === item.id
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    className={active ? 'is-on' : ''}
+                    title={item.desc}
+                    disabled={pending === 'layout/end-mark'}
+                    onClick={() => { if (!active) void act('layout/end-mark', { id: article.id, style: item.id }) }}
+                  >
+                    {item.name}
+                  </button>
+                )
+              })}
+            </SlidingTabs>
+          </div>
+        ) : null}
       </div>
       <div className="ws-layout-article" hidden={previewMode !== 'article'}>
         {!enhanced ? <>

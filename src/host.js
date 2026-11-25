@@ -32,7 +32,7 @@ import {
   resolveCoverStyle,
   saveCustomCoverStyle,
 } from './custom-cover-styles.js'
-import { STYLES, THEMES, detectionText, renderLayout, resolveLayoutPreferences } from './layout.js'
+import { END_MARK_STYLE_IDS, normalizeEndMark, STYLES, THEMES, detectionText, renderLayout, resolveLayoutPreferences } from './layout.js'
 import { applyRule, buildInsights, EXPERIMENT_RESULTS, importData, INSIGHTS_EMPTY, previewRule } from './insights.js'
 import { Pipeline } from './pipeline.js'
 import { runPreflight } from './preflight.js'
@@ -492,6 +492,7 @@ function view(article, pipeline, store, inlineStyles = [], inlineStyleWarnings =
     })),
     banner: bannerView(article),
     followCard: article.followCard === true,
+    endMark: normalizeEndMark(article.endMark, 'horizon'),
     layoutPreferences: article.layoutPreferences ?? null,
     effectiveLayoutPreferences,
     derivatives: derivativesView(article),
@@ -744,10 +745,11 @@ export async function route(deps, req, res) {
       const banner = style === 'none' ? null : article.banners?.[style]?.spec ?? null
       const studioOptions = {
         banner: bannerView(article), followCard: article.followCard === true,
+        endMark: normalizeEndMark(article.endMark, 'horizon'),
         layoutPreferences: article.layoutPreferences ?? null,
       }
       const { html, report } = await renderLayout(toMarkdown(article), {
-        ...resolveLayoutPreferences(settings, article), banner, followCard: studioOptions.followCard, brand: settings.brand, studioOptions,
+        ...resolveLayoutPreferences(settings, article), banner, followCard: studioOptions.followCard, endMark: studioOptions.endMark, brand: settings.brand, studioOptions,
       })
       return json(res, 200, { html, report })
     }
@@ -996,6 +998,7 @@ export async function route(deps, req, res) {
       if (urls.length) article.imageImport = { error: '图片转存中断，可以重试。', remaining: urls.length }
       await store.update(state => {
         if (state.lastLayoutPreferences) article.layoutPreferences = { ...state.lastLayoutPreferences }
+        if (state.lastEndMark) article.endMark = normalizeEndMark(state.lastEndMark, 'horizon')
         state.articles.push(article)
         state.currentId = article.id
       })
@@ -1343,6 +1346,15 @@ export async function route(deps, req, res) {
     case 'layout/follow-card': {
       if (typeof body.enabled !== 'boolean') return json(res, 400, { error: '请指定是否显示文末关注卡。' })
       await store.update(state => { mustFind(state, body.id).followCard = body.enabled })
+      return ok()
+    }
+    case 'layout/end-mark': {
+      if (!END_MARK_STYLE_IDS.includes(body.style)) return json(res, 400, { error: '请选择有效的文末标识样式。' })
+      await store.update(state => {
+        const article = mustFind(state, body.id)
+        article.endMark = body.style
+        state.lastEndMark = body.style
+      })
       return ok()
     }
     case 'banner/style': {

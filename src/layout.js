@@ -2,6 +2,9 @@
 // 产物是一个自带风格、配色切换和复制按钮的完整 HTML 页面，前端放进 iframe 里用。
 import * as engine from '../vendor/layout/layout.js'
 import * as bannerEngine from '../vendor/layout/banner.js'
+import { END_MARK_STYLES, END_MARK_STYLE_IDS, normalizeEndMark } from './end-mark.js'
+
+export { END_MARK_STYLES, END_MARK_STYLE_IDS, normalizeEndMark }
 
 export const STYLES = ['std', 'mag', 'min', 'geek', 'bold', 'neo', 'note', 'zen', 'bento', 'dark']
 export const THEMES = ['orange', 'blue', 'teal', 'ink', 'navy', 'violet', 'rose', 'amber', 'morandi', 'forest', 'petrol', 'mist', 'matcha', 'cocoa', 'dusty']
@@ -25,9 +28,10 @@ const jsonCopy = value => JSON.parse(JSON.stringify(value))
  * @param {{style?: string, theme?: string, banner?: object, followCard?: boolean, brand?: {author?: string, slogan?: string}}} [options] - 默认风格和配色（不合法的值忽略），横幅规格（没有就不画横幅）。
  * @returns {Promise<{html: string, report: string}>} 页面和排版引擎的自查报告。
  */
-export async function renderLayout(markdown, { style, theme, banner, followCard = false, brand, studioOptions } = {}) {
+export async function renderLayout(markdown, { style, theme, banner, followCard = false, endMark, brand, studioOptions } = {}) {
   const { html, report } = engine.renderPage(String(markdown), {
     outro: followCard ? 'true' : 'false',
+    endMark: endMark !== undefined ? normalizeEndMark(endMark, 'none') : undefined,
     brandAuthor: brand?.author || undefined,
     brandSlogan: brand?.slogan || undefined,
     studioOptions: studioOptions ? jsonCopy(studioOptions) : undefined,
@@ -41,9 +45,10 @@ export async function renderLayout(markdown, { style, theme, banner, followCard 
 /**
  * 渲染可直接推送到微信公众号草稿箱的正文 HTML 片段（不含预览页壳子）。
  */
-export async function renderWechatHtml(markdown, { style, theme, banner, followCard = false, brand, avatarUrl, name = '' } = {}) {
+export async function renderWechatHtml(markdown, { style, theme, banner, followCard = false, endMark, brand, avatarUrl, name = '' } = {}) {
   return engine.renderFragment(String(markdown), {
     outro: followCard ? 'true' : 'false',
+    endMark: endMark !== undefined ? normalizeEndMark(endMark, 'none') : undefined,
     brandAuthor: brand?.author || undefined,
     brandSlogan: brand?.slogan || undefined,
     avatarUrl: avatarUrl || '',

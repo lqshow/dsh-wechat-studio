@@ -56,7 +56,7 @@ export function postJson(path, body, options = {}) {
   return request(path, { ...options, method: 'POST', headers: { 'content-type': 'application/json', ...(options.headers ?? {}) }, body: JSON.stringify(body) })
 }
 
-const bodyKey = (current, brand) => (current ? [current.id, current.title, current.banner?.style, current.banner?.at, current.followCard, brand?.author, brand?.slogan, ...current.blocks.map(b => b.text)].join('\u0001') : '')
+const bodyKey = (current, brand) => (current ? [current.id, current.title, current.banner?.style, current.banner?.at, current.followCard, current.endMark, brand?.author, brand?.slogan, ...current.blocks.map(b => b.text)].join('\u0001') : '')
 
 export function loadRevisions(id, signal) {
   return request(`revisions?${new URLSearchParams({ id })}`, { signal })
