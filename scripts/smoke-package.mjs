@@ -20,10 +20,10 @@ try {
     assert.equal(Object.keys(installedPkg[field] || {}).length, 0, `Unexpected ${field}`)
   }
   // Check every declared export, plus lazy-loaded bundles the CLI might not import.
-  for (const file of [...Object.values(installedPkg.exports), 'dist/unpdf.mjs', 'dist/image-crop.mjs']) {
+  for (const file of [...Object.values(installedPkg.exports), 'dist/unpdf.mjs', 'dist/image-crop.mjs', 'dist/docx-text.mjs']) {
     await access(join(installed, file))
   }
-  execFileSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(pkg.name)}); await import(${JSON.stringify(pathToFileURL(join(installed, 'dist/unpdf.mjs')).href)});`], { cwd: dir, env, stdio: 'inherit' })
+  execFileSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(pkg.name)}); await import(${JSON.stringify(pathToFileURL(join(installed, 'dist/unpdf.mjs')).href)}); await import(${JSON.stringify(pathToFileURL(join(installed, 'dist/docx-text.mjs')).href)});`], { cwd: dir, env, stdio: 'inherit' })
   const originalPath = Object.entries(env).find(([key]) => key.toUpperCase() === 'PATH')?.[1] || ''
   for (const key of Object.keys(env)) if (key.toUpperCase() === 'PATH') delete env[key]
   env.PATH = [join(dir, 'node_modules', '.bin'), originalPath].join(delimiter)

@@ -970,6 +970,14 @@ export async function prepAct(path, body = {}, { method, refreshState, quiet = f
   }
 }
 
+export function importPrepBriefFile(file) {
+  return request(`prep/brief-file?${new URLSearchParams({ name: file.name })}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: file,
+  })
+}
+
 export async function uploadPrepAsset(file) {
   if (!file) return null
   const query = file.name ? `?${new URLSearchParams({ name: file.name })}` : ''

@@ -61,6 +61,7 @@ import {
   updateNote,
 } from './prep.js'
 import { pdfToText } from './report.js'
+import { MAX_BRIEF_FILE_BYTES, readBriefFile } from './brief-file.js'
 import { cacheMpHeadImg, publicSettings, readSettings, updateSettings } from './settings.js'
 import { scheduleTime as parseScheduleTime } from './schedule-time.js'
 import { JsonStore, Store } from './store.js'
@@ -960,6 +961,14 @@ export async function route(deps, req, res) {
     const text = await pdfToText(await readBuffer(req, MAX_PDF))
     pipeline.report(article.id, text)
     return ok()
+  }
+
+  if (path === 'prep/brief-file') {
+    if (Number(req.headers['content-length']) > MAX_BRIEF_FILE_BYTES) {
+      return json(res, 413, { error: '文件不能超过 10 MB。' })
+    }
+    const buffer = await readBuffer(req, MAX_BRIEF_FILE_BYTES)
+    return json(res, 200, await readBriefFile(buffer, url.searchParams.get('name') ?? ''))
   }
 
   if (path === 'prep/assets') {

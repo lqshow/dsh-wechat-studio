@@ -1,4 +1,4 @@
-// 打包三样东西：
+// 打包客户端和本地解析工具：
 // 1. client/ → dist/client.js，DSH 的 lazy CommonJS 模块，react 由宿主提供，CSS 内联成字符串。
 // 2. unpdf → dist/unpdf.mjs，读朱雀报告 PDF 用。
 // 3. image-crop → dist/image-crop.mjs，跨平台裁切封面用；后两者打进来之后插件没有任何运行时依赖，装上就能跑。
@@ -51,6 +51,13 @@ const imageCrop = {
 
 await build(pdf)
 await build(imageCrop)
+await build({
+  ...imageCrop,
+  stdin: { contents: "export { docxToText } from './src/docx-text.js'", resolveDir: process.cwd() },
+  outfile: 'dist/docx-text.mjs',
+  supported: { 'template-literal': false },
+  legalComments: 'inline',
+})
 if (watch) {
   const ctx = await context(client)
   await ctx.watch()

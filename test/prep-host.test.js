@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { createZip } from '../client/zip.js'
 import { createArticle } from '../src/article.js'
 import { createHandler, route } from '../src/host.js'
 import { PREP_EMPTY } from '../src/prep.js'
@@ -718,4 +719,45 @@ test('block/append appends user-written paragraphs to blank promoted article and
   const undone = await request('undo', { body: { id: articleId } })
   assert.equal(undone.status, 200)
   assert.equal(undone.body.current.blocks.length, 0)
+})
+
+test('甲方原文文件导入提取 PDF 和 Word 内容，不调用模型或写入备稿数据', async t => {
+  const { request, prepStore } = setup(t)
+  const upload = (name, rawBody) => request(`prep/brief-file?${new URLSearchParams({ name })}`, { rawBody })
+  const pdf = readFileSync(new URL('./fixtures/report.pdf', import.meta.url))
+  const pdfResult = await upload('合作说明.PDF', pdf)
+  assert.equal(pdfResult.status, 200)
+  assert.match(pdfResult.body.text, /AIGC 0\.93 fragment one/)
+  const blankPdf = Buffer.from(pdf.toString('latin1').replace('/Contents 5 0 R', ' '.repeat(15)), 'latin1')
+  const blankResult = await upload('无文字.pdf', blankPdf)
+  assert.equal(blankResult.status, 422)
+  assert.match(blankResult.body.error, /OCR/)
+  const oversized = await request('prep/brief-file?name=too-large.pdf', {
+    rawBody: pdf,
+    headers: { 'content-length': String(10 * 1024 * 1024 + 1) },
+  })
+  assert.equal(oversized.status, 413)
+
+
+  const encoder = new TextEncoder()
+  const wordFile = first => Buffer.from(createZip([
+    {
+      name: 'word/document.xml',
+      data: encoder.encode(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>${first}</w:t></w:r><w:hyperlink r:id="rId1"><w:r><w:t>点击试用</w:t></w:r></w:hyperlink></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>兑换码 ABC-101</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>`),
+    },
+    {
+      name: 'word/_rels/document.xml.rels',
+      data: encoder.encode('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" TargetMode="External" Target="https://example.com/trial?a=1&amp;b=2"/></Relationships>'),
+    },
+  ]))
+  const docxResult = await upload('合作说明.docx', wordFile('甲方要求 '))
+  assert.equal(docxResult.status, 200)
+  assert.equal(docxResult.body.text, '甲方要求 点击试用 (https://example.com/trial?a=1&b=2)\n兑换码 ABC-101')
+  assert.deepEqual(await prepStore.read(), PREP_EMPTY)
+
+  const tooLong = await upload('过长.docx', wordFile('字'.repeat(20_001)))
+  assert.equal(tooLong.status, 422)
+  assert.match(tooLong.body.error, /20,000/)
+  assert.equal((await upload('假文档.docx', pdf)).status, 400)
+  assert.equal((await upload('旧版.doc', wordFile('原文'))).status, 400)
 })

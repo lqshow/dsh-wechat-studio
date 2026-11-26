@@ -1,3 +1,4 @@
+import { formatSellingPoints } from '../src/prep-brief-text.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
@@ -243,4 +244,16 @@ test('纸条写入刷新稿面和排期，旧的读取响应不会覆盖新快�
   await remove
   assert.deepEqual(getState().prep.notes, [])
   assert.equal(getState().data.prepPlaceholders[0].noteCount, 0)
+})
+
+test('核心卖点在句末分段，保留文字、手工分段和存储上限', () => {
+  const point = '围绕生产力展开，重点评估复杂任务的交付质量与可用性。'.repeat(3)
+  const original = point.repeat(3)
+  const formatted = formatSellingPoints(original)
+  assert.ok(formatted.split('\n\n').length >= 2)
+  assert.equal(formatted.replaceAll('\n', ''), original)
+  assert.equal(formatSellingPoints(formatted), formatted)
+  assert.equal(formatSellingPoints('短卖点。'), '短卖点。')
+  const atLimit = original.padEnd(500, '字')
+  assert.equal(formatSellingPoints(atLimit), atLimit)
 })

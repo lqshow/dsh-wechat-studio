@@ -1,9 +1,10 @@
 // 备稿模块（纸条 × 选题袋）：0.5 秒捕获、正在攒料剪报袋、自由纸条流、剪报袋抽屉与全站速记浮窗。
 import React from 'react'
+import { formatSellingPoints, MAX_SELLING_POINTS } from '../src/prep-brief-text.js'
 import { parseDay } from '../src/schedule-time.js'
 import { AnimatedNumber, SlidingTabs, useDialogClose, usePresence } from './motion.jsx'
 import { formatDueCountdown, isEditableTarget, summarizePrep } from './prep-model.js'
-import { act, copyText, getState, loadPrep, openPrepBag, prepAct, refresh, setQuickCaptureOpen, setState, toast, uploadPrepAsset, useStudio } from './state.js'
+import { act, copyText, getState, importPrepBriefFile, loadPrep, openPrepBag, prepAct, refresh, setQuickCaptureOpen, setState, toast, uploadPrepAsset, useStudio } from './state.js'
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_MD_BYTES = 2 * 1024 * 1024
@@ -430,6 +431,9 @@ function CreateBagDialog({ initialTitle = '', noteIds = null, onCreated, onClose
 function ExtractBriefDialog({ bag, onApplied, onClose }) {
   const { closing, requestClose } = useDialogClose(onClose)
   const [rawText, setRawText] = React.useState(bag.brief?.rawText ?? '')
+  const [importing, setImporting] = React.useState(false)
+  const [importFeedback, setImportFeedback] = React.useState(null)
+  const fileRef = React.useRef(null)
   const [extracting, setExtracting] = React.useState(false)
   const [applying, setApplying] = React.useState(false)
   const [preview, setPreview] = React.useState(null)
@@ -443,7 +447,7 @@ function ExtractBriefDialog({ bag, onApplied, onClose }) {
 
   React.useEffect(() => {
     const onKey = event => {
-      if (event.key === 'Escape' && !extracting && !applying) {
+      if (event.key === 'Escape' && !importing && !extracting && !applying) {
         event.preventDefault()
         event.stopPropagation()
         requestClose()
@@ -451,11 +455,37 @@ function ExtractBriefDialog({ bag, onApplied, onClose }) {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [requestClose, extracting, applying])
+  }, [requestClose, importing, extracting, applying])
+
+  const importFile = async event => {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file || importing) return
+    setImportFeedback(null)
+    if (!/\.(pdf|docx)$/i.test(file.name) || file.size > 10 * 1024 * 1024) {
+      setImportFeedback({ error: '请选择不超过 10 MB 的 PDF 或 Word（.docx）文件。' })
+      return
+    }
+    setImporting(true)
+    try {
+      const { text, warning } = await importPrepBriefFile(file)
+      const combined = [rawText.trimEnd(), text].filter(Boolean).join('\n\n')
+      if (combined.length > MAX_RAW_BRIEF_CHARS) {
+        setImportFeedback({ error: '原文与导入内容合计超过 20,000 字。请缩短原文后再导入。' })
+        return
+      }
+      setRawText(combined)
+      setImportFeedback({ message: warning || `已导入 ${file.name}，核对原文后可开始提炼。` })
+    } catch (err) {
+      setImportFeedback({ error: err.message })
+    } finally {
+      setImporting(false)
+    }
+  }
 
   const runExtract = async event => {
     event?.preventDefault()
-    if (extracting) return
+    if (importing || extracting) return
     const trimmed = rawText.trim()
     if (!trimmed) {
       toast('请先粘贴甲方聊天记录或 Brief 原文', true)
@@ -504,15 +534,15 @@ function ExtractBriefDialog({ bag, onApplied, onClose }) {
   return (
     <div
       className={`ws-scrim${closing ? ' is-closing' : ''}`}
-      onClick={e => { if (e.target === e.currentTarget && !extracting && !applying) requestClose() }}
+      onClick={e => { if (e.target === e.currentTarget && !importing && !extracting && !applying) requestClose() }}
     >
       <div className="ws-dialog ws-prep-modal ws-prep-extract-modal" role="dialog" aria-modal="true" aria-labelledby={headingId}>
         <div className="ws-dialog-head">
           <div>
             <h2 id={headingId} className="ws-dialog-title">✦ 贴甲方原文提炼</h2>
-            <p className="ws-muted ws-small">粘贴微信聊天记录或需求 Brief，先预览提炼结果，确认后才覆盖要点卡。</p>
+            <p className="ws-muted ws-small">粘贴原文或导入文件。预览提炼结果后，确认回填要点卡。</p>
           </div>
-          <button type="button" className="ws-icon-btn" aria-label="关闭" disabled={extracting || applying} onClick={requestClose}>
+          <button type="button" className="ws-icon-btn" aria-label="关闭" disabled={importing || extracting || applying} onClick={requestClose}>
             <PrepIcon name="close" />
           </button>
         </div>
@@ -526,14 +556,22 @@ function ExtractBriefDialog({ bag, onApplied, onClose }) {
                 rows={9}
                 maxLength={MAX_RAW_BRIEF_CHARS}
                 value={rawText}
-                disabled={extracting}
+                disabled={importing || extracting}
                 placeholder="直接粘贴甲方发来的合作说明、群聊要点、必带链接与禁用词…"
                 onChange={e => setRawText(e.target.value)}
               />
             </label>
+            <div>
+              <input ref={fileRef} type="file" accept=".pdf,.docx" hidden onChange={importFile} />
+              <button type="button" className="ws-btn" disabled={importing || extracting} onClick={() => fileRef.current?.click()}>
+                {importing ? '正在读取文件…' : '上传 PDF / Word'}
+              </button>
+              {importFeedback?.error ? <p className="ws-banner is-error" role="alert">{importFeedback.error}</p> : null}
+              {importFeedback?.message ? <p className="ws-small ws-muted" role="status">{importFeedback.message}</p> : null}
+            </div>
             <div className="ws-dialog-foot">
-              <button type="button" className="ws-btn" disabled={extracting} onClick={requestClose}>取消</button>
-              <button type="submit" className="ws-btn is-primary" disabled={extracting || !rawText.trim()}>
+              <button type="button" className="ws-btn" disabled={importing || extracting} onClick={requestClose}>取消</button>
+              <button type="submit" className="ws-btn is-primary" disabled={importing || extracting || !rawText.trim()}>
                 {extracting ? '正在提炼要点…' : '✦ 开始提炼'}
               </button>
             </div>
@@ -547,7 +585,7 @@ function ExtractBriefDialog({ bag, onApplied, onClose }) {
               </div>
               <div className="ws-prep-extract-row">
                 <span>核心卖点</span>
-                <p>{preview.sellingPoints || '（未提及）'}</p>
+                <p className="ws-prep-selling-points-preview">{preview.sellingPoints || '（未提及）'}</p>
               </div>
               <div className="ws-prep-extract-row">
                 <span>必带信息</span>
@@ -844,7 +882,10 @@ function BagDrawerContent({ bag, hasModel, extractOpen, onOpenExtract, onClose, 
   const [title, setTitle] = React.useState(bag.title)
   const [briefOpen, setBriefOpen] = React.useState(true)
   const [partner, setPartner] = React.useState(bag.brief?.partner ?? '')
-  const [sellingPoints, setSellingPoints] = React.useState(bag.brief?.sellingPoints ?? '')
+  const savedSellingPoints = bag.brief?.sellingPoints ?? ''
+  const displaySellingPoints = formatSellingPoints(savedSellingPoints)
+  const [sellingPoints, setSellingPoints] = React.useState(displaySellingPoints)
+  const sellingPointsToSave = value => value === displaySellingPoints ? savedSellingPoints : value
   const [mustInclude, setMustInclude] = React.useState(bag.brief?.mustInclude ?? [])
   const [taboo, setTaboo] = React.useState(bag.brief?.taboo ?? [])
 
@@ -876,7 +917,7 @@ function BagDrawerContent({ bag, hasModel, extractOpen, onOpenExtract, onClose, 
   }, [bag.title])
   React.useEffect(() => {
     setPartner(bag.brief?.partner ?? '')
-    setSellingPoints(bag.brief?.sellingPoints ?? '')
+    setSellingPoints(displaySellingPoints)
     setMustInclude(bag.brief?.mustInclude ?? [])
     setTaboo(bag.brief?.taboo ?? [])
   }, [serverBriefKey])
@@ -927,7 +968,7 @@ function BagDrawerContent({ bag, hasModel, extractOpen, onOpenExtract, onClose, 
   const saveBriefPatch = async patch => {
     const nextBrief = {
       partner: patch.partner !== undefined ? patch.partner : partner,
-      sellingPoints: patch.sellingPoints !== undefined ? patch.sellingPoints : sellingPoints,
+      sellingPoints: sellingPointsToSave(patch.sellingPoints ?? sellingPoints),
       mustInclude: patch.mustInclude !== undefined ? patch.mustInclude : mustInclude,
       taboo: patch.taboo !== undefined ? patch.taboo : taboo,
       rawText: bag.brief?.rawText ?? '',
@@ -1009,7 +1050,7 @@ function BagDrawerContent({ bag, hasModel, extractOpen, onOpenExtract, onClose, 
     if (isSponsored) {
       const nextBrief = {
         partner,
-        sellingPoints,
+        sellingPoints: sellingPointsToSave(sellingPoints),
         mustInclude,
         taboo,
         rawText: bag.brief?.rawText ?? '',
@@ -1333,10 +1374,11 @@ function BagDrawerContent({ bag, hasModel, extractOpen, onOpenExtract, onClose, 
                 <label className="ws-field">
                   <span>核心卖点</span>
                   <textarea
-                    rows={2}
+                    className="ws-prep-selling-points"
+                    rows={4}
                     value={sellingPoints}
-                    maxLength={500}
-                    placeholder="一句话记下产品主打亮点或核心场景…"
+                    maxLength={MAX_SELLING_POINTS}
+                    placeholder="记下产品亮点和核心场景，可以分行填写…"
                     onChange={e => setSellingPoints(e.target.value)}
                     onBlur={() => void saveBriefPatch({ sellingPoints })}
                   />
@@ -3225,7 +3267,7 @@ export function SourceBagCard({ article, cloudinaryReady }) {
                 {brief?.sellingPoints ? (
                   <div className="ws-source-bag-field">
                     <span>核心卖点</span>
-                    <p>{brief.sellingPoints}</p>
+                    <p>{formatSellingPoints(brief.sellingPoints)}</p>
                   </div>
                 ) : null}
                 {mustInclude.length ? (

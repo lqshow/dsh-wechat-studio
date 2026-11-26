@@ -1,3 +1,4 @@
+import { formatSellingPoints, MAX_SELLING_POINTS } from './prep-brief-text.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
@@ -18,7 +19,7 @@ export const PREP_LIMITS = Object.freeze({
   maxBagTitle: 120,
   maxNoteText: 4000,
   maxPartner: 60,
-  maxSellingPoints: 500,
+  maxSellingPoints: MAX_SELLING_POINTS,
   maxListItems: 20,
   maxListItemLength: 120,
   maxRawText: 20000,
@@ -1575,6 +1576,7 @@ const EXTRACT_BRIEF_SYSTEM = [
   '字段约束：',
   `- partner: 字符串，合作方或产品名称，最多 ${PREP_LIMITS.maxPartner} 字，未提及留空字符串。`,
   `- sellingPoints: 字符串，核心卖点摘要，最多 ${PREP_LIMITS.maxSellingPoints} 字，未提及留空字符串。`,
+  '  内容较多时按主题分成短段，每段一个重点，段间用 JSON 字符串中的 \\n\\n 分隔。',
   `- mustInclude: 字符串数组，必带信息（如链接、口令、活动名、引导语），最多 ${PREP_LIMITS.maxListItems} 条，每条不超过 ${PREP_LIMITS.maxListItemLength} 字。`,
   `- taboo: 字符串数组，禁忌红线或避免表述，最多 ${PREP_LIMITS.maxListItems} 条，每条不超过 ${PREP_LIMITS.maxListItemLength} 字。`,
   '- targetDate: 仅当原文明确给出具体公历年月日（YYYY-MM-DD，年份 2000–2100）时填写，否则一律填 null；禁止输出“下周四”“本月底”等相对日期。',
@@ -1621,7 +1623,7 @@ export async function extractBriefFromRaw(ctx, rawText, { signal, callModelImpl 
 
   return {
     partner: sanitized.partner,
-    sellingPoints: sanitized.sellingPoints,
+    sellingPoints: formatSellingPoints(sanitized.sellingPoints),
     mustInclude: sanitized.mustInclude,
     taboo: sanitized.taboo,
     targetDate,
