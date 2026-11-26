@@ -12,7 +12,9 @@ import { COVER_STYLES, CUSTOM_COVER_STYLE_LIMITS, resolveCoverStyleName } from '
 // 稿面：左边对话改稿，中间是稿子和纸边批注，右边是标题、朱雀质检和导出。
 import React from 'react'
 import { cardMarkdown, emphasisFormats, formatSelection, insertFormats } from './editor-format.js'
-import { act, copyDetectionText, copyMarkdown, copyText, countCurrentParagraphDrafts, deleteCustomCoverStyle, getState, loadCoverStyles, loadLayout, loadModels, loadRevisions, loadSettings, loadSkills, loadStyleProfile, loadVersion, openCustomCoverStyleWizard, openStyleWizard, previewMarkdownReimport, reimportMarkdown, rememberArticleView, saveSettings, setQuickCaptureOpen, setState, testWechat, testZhuque, toast, uploadImage, uploadPortrait, uploadReport, useStudio } from './state.js'
+import { act, copyDetectionText, copyMarkdown, copyText, countCurrentParagraphDrafts, deleteCustomCoverStyle, getState, loadCoverStyles, loadLayout, loadModels, loadRevisions, loadSettings, loadSkills, loadStyleProfile, loadVersion, openCustomCoverStyleWizard, openStyleWizard, previewMarkdownReimport, reimportMarkdown, rememberArticleView, replaceArticleText, saveSettings, setQuickCaptureOpen, setState, testWechat, testZhuque, toast, uploadImage, uploadPortrait, uploadReport, useStudio } from './state.js'
+import { deriveDigest, MAX_DIGEST } from '../src/wechat-meta.js'
+import { diffInline } from './text-diff.js'
 import { CustomCoverStyleCard, CustomCoverStyleWizard, CustomCoverTestBanner } from './custom-cover-style.jsx'
 import { hasUnsavedDeriveDrafts } from './derive-draft-model.js'
 import { DeriveView } from './derive.jsx'
@@ -51,6 +53,8 @@ const ICONS = {
   spark: 'M7 2l1.3 3.7L12 7l-3.7 1.3L7 12l-1.3-3.7L2 7l3.7-1.3zM12.5 10.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z',
   user: 'M8 8.2a2.8 2.8 0 100-5.6 2.8 2.8 0 000 5.6zM3.2 13.5a4.8 4.8 0 019.6 0',
   quickNote: 'M10.8 2.4l2.8 2.8-7.4 7.4-3.2.5.5-3.2zM2.5 13.8h11',
+  arrowUp: 'M8 12.5V3.5M4.5 7L8 3.5 11.5 7',
+  arrowDown: 'M8 3.5v9M4.5 9L8 12.5 11.5 9',
 }
 
 export function Icon({ name, size = 16 }) {
@@ -577,7 +581,7 @@ function GalleryInsert({ card, onInsert, onClose, onUpload }) {
   </dialog>
 }
 
-function Editor({ articleId, block, number, sectionNumber, layoutPreferences, palette, busy, nextId, onDone }) {
+function Editor({ articleId, block, number, sectionNumber, layoutPreferences, palette, busy, isFirst, isLast, nextId, onInsertAfter, onDone }) {
   const [draft, setDraft] = React.useState(() => draftsFor(articleId).get(block.id) ?? { text: block.text, original: block.text })
   const storageFailed = useStudio(s => s.draftStorageFailed)
   const [preview, setPreview] = React.useState(false)
@@ -712,7 +716,30 @@ function Editor({ articleId, block, number, sectionNumber, layoutPreferences, pa
       }
     }}>
       <div className="ws-editor-tools">
-        <span>编辑第 {number} 段</span>
+        <div className="ws-editor-head-left">
+          <span>编辑第 {number} 段</span>
+          {!preview && !saving ? (
+            <div className="ws-editor-block-ops" role="group" aria-label="段落快捷操作">
+              <button type="button" className="ws-btn ws-editor-mini" title={changed ? '请先保存修改再调整顺序' : '上移这段'} aria-label="上移这段"
+                disabled={isFirst || busy || changed || conflict} onClick={() => void act('block/move', { id: articleId, blockId: block.id, direction: 'up' })}>
+                <Icon name="arrowUp" size={13} />
+              </button>
+              <button type="button" className="ws-btn ws-editor-mini" title={changed ? '请先保存修改再调整顺序' : '下移这段'} aria-label="下移这段"
+                disabled={isLast || busy || changed || conflict} onClick={() => void act('block/move', { id: articleId, blockId: block.id, direction: 'down' })}>
+                <Icon name="arrowDown" size={13} />
+              </button>
+              {onInsertAfter ? (
+                <button type="button" className="ws-btn ws-editor-mini" title={changed ? '请先保存修改再插入段落' : '在此段下方插入新段落'}
+                  disabled={busy || changed || conflict} onClick={() => onInsertAfter(block.id)}>+ 下方插段</button>
+              ) : null}
+              <button type="button" className="ws-btn ws-editor-mini" title="带入左侧改稿对话，让 AI 协助修改这一段"
+                disabled={busy} onClick={() => {
+                  setState({ chatOpen: true, chatDraftSeed: { text: `第 ${number} 段：`, at: Date.now() } })
+                  if (!changed) onDone()
+                }}>交给 AI</button>
+            </div>
+          ) : null}
+        </div>
         <div>
           {!preview && !saving ? <>
             <div className="ws-format-group" role="group" aria-label="文字强调">
@@ -977,10 +1004,84 @@ function BlankDraftCard({ article, busy }) {
   )
 }
 
-function Paper({ article, reviewTarget, reviewPulse }) {
+function InlineBlockComposer({ articleId, afterBlockId = null, afterNumber = null, busy, onClose }) {
+  const [text, setText] = React.useState('')
+  const [saving, setSaving] = React.useState(false)
+  const ref = React.useRef(null)
+
+  React.useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = '0px'
+    el.style.height = `${Math.max(88, el.scrollHeight)}px`
+  }, [text])
+
+  React.useEffect(() => {
+    ref.current?.focus({ preventScroll: true })
+  }, [])
+
+  const save = async () => {
+    const trimmed = text.trim()
+    if (!trimmed || saving || busy) return
+    setSaving(true)
+    const ok = await act('block/append', {
+      id: articleId,
+      text: trimmed,
+      ...(afterBlockId ? { afterBlockId } : {}),
+    })
+    setSaving(false)
+    if (ok) {
+      setText('')
+      onClose()
+    }
+  }
+
+  return (
+    <div
+      className="ws-editor ws-inline-insert"
+      onKeyDown={event => {
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          if (!saving) onClose()
+        }
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+          event.preventDefault()
+          void save()
+        }
+      }}
+    >
+      <div className="ws-editor-tools">
+        <span>{afterNumber != null ? `在第 ${afterNumber} 段后插入` : '文末续写新段落'}</span>
+        <span className="ws-muted ws-small">空一行自动拆成多段</span>
+      </div>
+      <textarea
+        ref={ref}
+        className="ws-edit"
+        value={text}
+        aria-label={afterNumber != null ? `在第 ${afterNumber} 段后插入新段落` : '文末续写新段落'}
+        readOnly={saving}
+        maxLength={20000}
+        placeholder="输入要新增的正文（支持 Markdown，空一行可一次写多段）…"
+        onChange={e => setText(e.target.value)}
+      />
+      <div className="ws-editor-footer">
+        <span role="status">{saving ? '正在写入…' : '⌘ / Ctrl + Enter 写入，Esc 取消'}</span>
+        <div>
+          <button type="button" className="ws-btn" disabled={saving} onClick={onClose}>取消</button>
+          <button type="button" className="ws-btn is-primary" disabled={saving || busy || !text.trim()} onClick={() => void save()}>写入正文</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Paper({ article, reviewTarget, reviewPulse, searchMatchedIds }) {
   const editing = useStudio(s => s.editing)
   const job = article.job
   const pending = useStudio(s => s.pending)
+  const [insertingAfter, setInsertingAfter] = React.useState(null)
+  React.useEffect(() => { setInsertingAfter(null) }, [article.id])
   if (job?.kind === 'draft') {
     return (
       <div className="ws-sheet-wrap">
@@ -1005,64 +1106,93 @@ function Paper({ article, reviewTarget, reviewPulse }) {
     )
   }
   let sectionNumber = 0
+  const busy = Boolean(job || pending)
   return (
     <div className="ws-sheet-wrap is-neo">
       <div className="ws-row">
-        <div className="ws-sheet is-first"><PaperTitle key={article.id} article={article} busy={Boolean(job || pending)} /></div>
+        <div className="ws-sheet is-first"><PaperTitle key={article.id} article={article} busy={busy} /></div>
         <div className="ws-margin" />
       </div>
       {article.blocks.map((block, index) => {
         const headingNumber = block.kind === 'heading' && /^##\s/.test(block.text) ? ++sectionNumber : undefined
         const flagged = block.check?.status === 'flag'
-        const last = index === article.blocks.length - 1
+        const searchHit = searchMatchedIds?.has(block.id)
         return (
-          <div className={`ws-row ${reviewTarget === block.id ? 'is-review-target' : ''} ${reviewPulse === block.id ? 'is-review-pulse' : ''}`} id={`ws-review-${article.id}-${block.id}`} key={block.id}>
-            <div className={`ws-sheet ${flagged ? 'is-flag' : ''} ${last ? 'is-last' : ''}`}>
-              {editing === block.id ? <span className="ws-no" aria-hidden="true">{index + 1}</span> :
-                <button type="button" className="ws-no ws-edge-edit" aria-label={`编辑第 ${index + 1} 段`} disabled={Boolean(job || pending)}
-                  onClick={() => openParagraph(article.id, block.id)}><span>{index + 1}</span><span aria-hidden="true">✎</span></button>}
-              {editing === block.id ? <Editor key={block.id} articleId={article.id} block={block} number={index + 1} sectionNumber={headingNumber} layoutPreferences={article.effectiveLayoutPreferences} palette={article.xhsPalette} busy={Boolean(job || pending)}
-                nextId={article.blocks[index + 1]?.id} onDone={nextId => {
-                const state = getState()
-                if (state.editing !== block.id) return
-                if (nextId && state.data?.current?.blocks.some(item => item.id === nextId)) {
-                  openParagraph(article.id, nextId)
-                  return
-                }
-                setState({ editing: null })
-                requestAnimationFrame(() => document.getElementById(`ws-review-${article.id}-${block.id}`)?.querySelector('.ws-block')?.focus({ preventScroll: true }))
-              }} />
-                : isSvgCardText(block.text) ? <div className="ws-block ws-svg-block">
-                  <BlockBody block={block} sectionNumber={headingNumber} articleId={article.id} layoutPreferences={article.effectiveLayoutPreferences} />
-                </div> : isVideoCardText(block.text) ? <div className="ws-block ws-svg-block">
-                  <BlockBody block={block} sectionNumber={headingNumber} layoutPreferences={article.effectiveLayoutPreferences} palette={article.xhsPalette}
-                    onEdit={Boolean(job || pending) ? null : () => setState({
-                      videoCardModal: {
-                        card: { id: 'video', start: 0, end: block.text.length, selection: block.text },
-                        layoutStyle: article.effectiveLayoutPreferences?.style,
-                        palette: article.xhsPalette,
-                        onUpload: file => uploadImage(file, article.id),
-                        onClose: () => setState({ videoCardModal: null }),
-                        onInsert: async markdown => {
-                          if (markdown !== block.text) {
-                            const ok = await act('block/update', { id: article.id, blockId: block.id, text: markdown, expectedText: block.text })
-                            if (!ok) throw new Error('保存失败，请稍后重试。')
-                            trackParagraphDraft(article.id, block.id, null)
-                          }
-                          setState({ videoCardModal: null })
+          <React.Fragment key={block.id}>
+            <div className={`ws-row ${reviewTarget === block.id ? 'is-review-target' : ''} ${reviewPulse === block.id ? 'is-review-pulse' : ''} ${searchHit ? 'is-search-hit' : ''}`} id={`ws-review-${article.id}-${block.id}`}>
+              <div className={`ws-sheet ${flagged ? 'is-flag' : ''}`}>
+                {editing === block.id ? <span className="ws-no" aria-hidden="true">{index + 1}</span> :
+                  <button type="button" className="ws-no ws-edge-edit" aria-label={`编辑第 ${index + 1} 段`} disabled={busy}
+                    onClick={() => openParagraph(article.id, block.id)}><span>{index + 1}</span><span aria-hidden="true">✎</span></button>}
+                {editing === block.id ? <Editor key={block.id} articleId={article.id} block={block} number={index + 1} sectionNumber={headingNumber} layoutPreferences={article.effectiveLayoutPreferences} palette={article.xhsPalette} busy={busy}
+                  isFirst={index === 0} isLast={index === article.blocks.length - 1}
+                  nextId={article.blocks[index + 1]?.id}
+                  onInsertAfter={targetId => {
+                    setState({ editing: null })
+                    setInsertingAfter(targetId)
+                  }}
+                  onDone={nextId => {
+                  const state = getState()
+                  if (state.editing !== block.id) return
+                  if (nextId && state.data?.current?.blocks.some(item => item.id === nextId)) {
+                    openParagraph(article.id, nextId)
+                    return
+                  }
+                  setState({ editing: null })
+                  requestAnimationFrame(() => document.getElementById(`ws-review-${article.id}-${block.id}`)?.querySelector('.ws-block')?.focus({ preventScroll: true }))
+                }} />
+                  : isSvgCardText(block.text) ? <div className="ws-block ws-svg-block">
+                    <BlockBody block={block} sectionNumber={headingNumber} articleId={article.id} layoutPreferences={article.effectiveLayoutPreferences} />
+                  </div> : isVideoCardText(block.text) ? <div className="ws-block ws-svg-block">
+                    <BlockBody block={block} sectionNumber={headingNumber} layoutPreferences={article.effectiveLayoutPreferences} palette={article.xhsPalette}
+                      onEdit={busy ? null : () => setState({
+                        videoCardModal: {
+                          card: { id: 'video', start: 0, end: block.text.length, selection: block.text },
+                          layoutStyle: article.effectiveLayoutPreferences?.style,
+                          palette: article.xhsPalette,
+                          onUpload: file => uploadImage(file, article.id),
+                          onClose: () => setState({ videoCardModal: null }),
+                          onInsert: async markdown => {
+                            if (markdown !== block.text) {
+                              const ok = await act('block/update', { id: article.id, blockId: block.id, text: markdown, expectedText: block.text })
+                              if (!ok) throw new Error('保存失败，请稍后重试。')
+                              trackParagraphDraft(article.id, block.id, null)
+                            }
+                            setState({ videoCardModal: null })
+                          },
                         },
-                      },
-                    })} />
-                  {draftsFor(article.id).has(block.id) ? <span className="ws-unsaved">有未保存的修改</span> : null}
-                </div> : <button type="button" className="ws-block" disabled={Boolean(job || pending)} title="点一下直接改这一段" onClick={() => openParagraph(article.id, block.id)}>
-                  <BlockBody block={block} sectionNumber={headingNumber} layoutPreferences={article.effectiveLayoutPreferences} palette={article.xhsPalette} />
-                  {draftsFor(article.id).has(block.id) ? <span className="ws-unsaved">有未保存的修改</span> : null}
-                </button>}
+                      })} />
+                    {draftsFor(article.id).has(block.id) ? <span className="ws-unsaved">有未保存的修改</span> : null}
+                  </div> : <button type="button" className="ws-block" disabled={busy} title="点一下直接改这一段" onClick={() => openParagraph(article.id, block.id)}>
+                    <BlockBody block={block} sectionNumber={headingNumber} layoutPreferences={article.effectiveLayoutPreferences} palette={article.xhsPalette} />
+                    {draftsFor(article.id).has(block.id) ? <span className="ws-unsaved">有未保存的修改</span> : null}
+                  </button>}
+              </div>
+              <div className="ws-margin"><Annotation block={block} job={job} /></div>
             </div>
-            <div className="ws-margin"><Annotation block={block} job={job} /></div>
-          </div>
+            {insertingAfter === block.id ? (
+              <div className="ws-row">
+                <div className="ws-sheet">
+                  <InlineBlockComposer articleId={article.id} afterBlockId={block.id} afterNumber={index + 1} busy={busy} onClose={() => setInsertingAfter(null)} />
+                </div>
+                <div className="ws-margin" />
+              </div>
+            ) : null}
+          </React.Fragment>
         )
       })}
+      <div className="ws-row">
+        <div className="ws-sheet is-last ws-paper-tail">
+          {insertingAfter === 'end' ? (
+            <InlineBlockComposer articleId={article.id} busy={busy} onClose={() => setInsertingAfter(null)} />
+          ) : (
+            <button type="button" className="ws-paper-append" disabled={busy} onClick={() => { setState({ editing: null }); setInsertingAfter('end') }}>
+              <Icon name="plus" size={14} /><span>续写一段</span>
+            </button>
+          )}
+        </div>
+        <div className="ws-margin" />
+      </div>
     </div>
   )
 }
@@ -1236,11 +1366,31 @@ function FixAll({ article }) {
   )
 }
 
+const CHAT_QUICK_PROMPTS = [
+  { label: '收紧开头', prompt: '把开头两段收紧，第一句直接抛核心观点或画面。' },
+  { label: '删啰嗦词', prompt: '检查全文节奏，精简重复或铺垫过长的段落，保留原意和口吻。' },
+  { label: '顺畅过渡', prompt: '检查各小节之间的衔接，补足或顺滑生硬的过渡句。' },
+  { label: '提炼金句', prompt: '在核心论证处提炼 2～3 句更有记忆点的短句，不要生硬说教。' },
+]
+
 function ChatPane({ article }) {
   const [text, setText] = React.useState('')
+  const seed = useStudio(s => s.chatDraftSeed)
   const listRef = React.useRef(null)
+  const inputRef = React.useRef(null)
   const busy = Boolean(article.job)
   React.useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: scrollBehavior() }) }, [article.chat.length, busy])
+  React.useEffect(() => {
+    if (!seed?.text) return
+    setText(prev => prev.trim() ? `${prev.trim()} ${seed.text}` : seed.text)
+    setState({ chatDraftSeed: null })
+    requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
+    })
+  }, [seed])
   const send = async event => {
     event.preventDefault()
     const message = text.trim()
@@ -1253,7 +1403,9 @@ function ChatPane({ article }) {
     <section className="ws-chat" aria-label="改稿对话">
       <h2 className="ws-pane-title">改稿</h2>
       <div className="ws-chat-list" ref={listRef}>
-        {article.chat.length ? null : <p className="ws-muted">说一句，改一段。比如「第 3 段太啰嗦，砍一半」「开头直接一点」「标题别超过 20 个字」。</p>}
+        {article.chat.length ? null : (
+          <p className="ws-muted">说一句，改一段。比如「第 3 段太啰嗦，砍一半」「开头直接一点」「标题别超过 20 个字」。</p>
+        )}
         {article.chat.map((turn, index) => turn.role === 'user' ? <p className="ws-bubble" key={index}>{turn.text}</p> : (
           <div className={`ws-reply ${turn.error ? 'is-error' : ''}`} key={index}>
             <p>{turn.text}</p>
@@ -1267,9 +1419,20 @@ function ChatPane({ article }) {
         ))}
         {article.job?.kind === 'chat' ? <div className="ws-reply"><span className="ws-shimmer">正在改…</span></div> : null}
       </div>
+      {article.blocks.length ? (
+        <div className="ws-chat-prompts" role="group" aria-label="快捷改稿指令">
+          {CHAT_QUICK_PROMPTS.map(item => (
+            <button key={item.label} type="button" className="ws-chat-chip" disabled={busy}
+              onClick={() => {
+                setText(item.prompt)
+                requestAnimationFrame(() => inputRef.current?.focus())
+              }}>{item.label}</button>
+          ))}
+        </div>
+      ) : null}
       <form className="ws-composer" onSubmit={send}>
         <label className="ws-sr" htmlFor="ws-chat-input">改稿指令</label>
-        <input id="ws-chat-input" type="text" value={text} placeholder="说一句，改一段" autoComplete="off" onChange={e => setText(e.target.value)} />
+        <input ref={inputRef} id="ws-chat-input" type="text" value={text} placeholder="说一句，改一段" autoComplete="off" onChange={e => setText(e.target.value)} />
         <button type="submit" className="ws-send" aria-label="发送" disabled={busy || !text.trim()}><Icon name="send" size={17} /></button>
       </form>
     </section>
@@ -1640,6 +1803,82 @@ function openArticleView(article, view) {
   void rememberArticleView(article.id, view)
 }
 
+function ArticleSummaryEditor({ article, busy }) {
+  const [editing, setEditing] = React.useState(false)
+  const [draft, setDraft] = React.useState(article.summary ?? '')
+  const [saving, setSaving] = React.useState(false)
+  const ref = React.useRef(null)
+
+  React.useEffect(() => {
+    setEditing(false)
+    setDraft(article.summary ?? '')
+  }, [article.id])
+
+  React.useEffect(() => {
+    if (editing) ref.current?.focus({ preventScroll: true })
+  }, [editing])
+
+  const normalized = draft.replace(/\s+/g, ' ').trim()
+  const changed = normalized !== (article.summary ?? '')
+  const fallbackDigest = React.useMemo(
+    () => deriveDigest({ blocks: article.blocks }, MAX_DIGEST).text,
+    [article.blocks],
+  )
+
+  const start = () => {
+    setDraft(article.summary ?? '')
+    setEditing(true)
+  }
+
+  const save = async () => {
+    if (saving || busy || !changed) return
+    setSaving(true)
+    const ok = await act('summary/update', { id: article.id, text: normalized })
+    setSaving(false)
+    if (ok) {
+      setEditing(false)
+      toast(normalized ? '摘要已保存' : '已清空摘要')
+    }
+  }
+
+  return (
+    <div className="ws-summary-box">
+      <div className="ws-sec-head">
+        <span className="ws-summary-label">文章摘要</span>
+        {editing ? (
+          fallbackDigest ? (
+            <button type="button" className="ws-link" disabled={saving} onClick={() => setDraft(fallbackDigest)}>从首段截取</button>
+          ) : null
+        ) : (
+          <button type="button" className="ws-link" disabled={busy} onClick={start}>{article.summary ? '编辑' : '填写'}</button>
+        )}
+      </div>
+      {editing ? (
+        <div className="ws-summary-editor" onKeyDown={event => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return
+          if (event.key === 'Escape') { event.preventDefault(); if (!saving) setEditing(false) }
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); void save() }
+        }}>
+          <textarea ref={ref} rows={3} maxLength={MAX_DIGEST} value={draft} readOnly={saving}
+            aria-label="文章摘要" placeholder="用于转发给好友卡片与推送公众号草稿箱（最多 120 字）"
+            onChange={e => setDraft(e.target.value.replace(/\r?\n/g, ' '))} />
+          <div className="ws-summary-foot">
+            <span className="ws-muted ws-small">{normalized.length} / {MAX_DIGEST} 字</span>
+            <div className="ws-summary-actions">
+              <button type="button" className="ws-btn" disabled={saving} onClick={() => setEditing(false)}>取消</button>
+              <button type="button" className="ws-btn is-primary" disabled={saving || busy || !changed} onClick={() => void save()}>保存</button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <button type="button" className={`ws-summary-display ${article.summary ? '' : 'is-empty'}`} disabled={busy} onClick={start}>
+          {article.summary || '未填写摘要 · 推送草稿箱时将自动取首段正文'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function ArticleInfoPane({ article, cloudinaryReady }) {
   const busy = Boolean(article.job)
   const generating = article.job?.kind === 'titles'
@@ -1664,7 +1903,7 @@ function ArticleInfoPane({ article, cloudinaryReady }) {
         </button> : null}
       </div>
       <p className="ws-side-title">{article.title || '还没有标题'}</p>
-      {article.summary ? <p className="ws-summary"><span>摘要</span>{article.summary}</p> : null}
+      <ArticleSummaryEditor article={article} busy={busy} />
       {showTitles || !article.title ? <div className="ws-sec ws-side-candidates">
         <div className="ws-sec-head">
           <h3 className="ws-pane-title">标题候选</h3>
@@ -2679,10 +2918,22 @@ function RevisionDialog({ article, blockId }) {
   const revision = blockId ? block?.previousText != null ? { index, rows: [{
     kind: 'rewrite', before: { text: block.previousText, number: index + 1 }, after: { text: block.text, number: index + 1 },
   }] } : null : result?.revisions?.find(item => item.index === selected) ?? result?.revisions?.[0]
-  const renderCell = (entry, empty, side, kind) => (
+  const renderDiffParts = (parts, fallbackText) => {
+    if (!parts) return <p>{fallbackText}</p>
+    return (
+      <p>
+        {parts.map((part, idx) => part.kind === 'del'
+          ? <del key={idx} className="ws-diff-del">{part.text}</del>
+          : part.kind === 'ins'
+            ? <ins key={idx} className="ws-diff-ins">{part.text}</ins>
+            : <React.Fragment key={idx}>{part.text}</React.Fragment>)}
+      </p>
+    )
+  }
+  const renderCell = (entry, empty, side, kind, parts = null) => (
     <div className={`ws-revision-cell is-${side}${entry ? '' : ' is-empty'}`}>
       <span className="ws-revision-cell-label">{blockId ? side === 'before' ? (restored ? '恢复前的版本' : '上一个版本') : '当前正文' : side === 'before' ? '改稿前' : '改稿后'}{entry?.number ? ` · 第 ${entry.number} 段` : kind === 'title' ? ' · 标题' : ''}</span>
-      {entry ? <p>{entry.text}</p> : <p className="ws-muted">{empty}</p>}
+      {entry ? renderDiffParts(parts, entry.text) : <p className="ws-muted">{empty}</p>}
     </div>
   )
   return (
@@ -2706,13 +2957,26 @@ function RevisionDialog({ article, blockId }) {
             <span className="ws-muted ws-small">{revision.rows.length} 处改动</span>
           </div> : null}
           <div className="ws-revision-rows" key={revision.index} tabIndex={0} aria-label="改稿差异">
-            {revision.rows.map((row, i) => (
-              <section className={`ws-revision-row is-${row.kind}`} key={i}>
-                <div className="ws-revision-kind">{restored ? '已恢复' : revisionKinds[row.kind]}</div>
-                {renderCell(row.before, row.kind === 'title' ? '原来没有标题' : '原来没有这段', 'before', row.kind)}
-                {renderCell(row.after, row.kind === 'title' ? '标题已移除' : '这段已删除', 'after', row.kind)}
-              </section>
-            ))}
+            {revision.rows.map((row, i) => {
+              const diff = row.before && row.after && (row.kind === 'rewrite' || row.kind === 'title')
+                ? diffInline(row.before.text, row.after.text)
+                : null
+              return (
+                <section className={`ws-revision-row is-${row.kind}`} key={i}>
+                  <div className="ws-revision-kind">
+                    <span>{restored ? '已恢复' : revisionKinds[row.kind]}</span>
+                    {diff && (diff.added || diff.removed) ? (
+                      <span className="ws-diff-stats" aria-label={`新增 ${diff.added} 字，删去 ${diff.removed} 字`}>
+                        {diff.removed ? <span className="ws-diff-stat is-del">-{diff.removed}</span> : null}
+                        {diff.added ? <span className="ws-diff-stat is-add">+{diff.added}</span> : null}
+                      </span>
+                    ) : null}
+                  </div>
+                  {renderCell(row.before, row.kind === 'title' ? '原来没有标题' : '原来没有这段', 'before', row.kind, diff?.before)}
+                  {renderCell(row.after, row.kind === 'title' ? '标题已移除' : '这段已删除', 'after', row.kind, diff?.after)}
+                </section>
+              )
+            })}
           </div>
           {blockId ? <div className="ws-revision-tools">
             <span className="ws-muted ws-small">只恢复这一段，恢复后可以撤销。</span>
@@ -2731,6 +2995,88 @@ function RevisionDialog({ article, blockId }) {
   )
 }
 
+function PaperSearchBar({ article, query, setQuery, caseSensitive, setCaseSensitive, matches, activeIndex, onStep, onClose, busy }) {
+  const [showReplace, setShowReplace] = React.useState(false)
+  const [replaceText, setReplaceText] = React.useState('')
+  const inputRef = React.useRef(null)
+
+  React.useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+
+  const currentMatch = matches[activeIndex] ?? null
+  const totalOccurrences = matches.reduce((sum, m) => sum + m.count, 0)
+
+  const runReplace = async (scope) => {
+    if (!query || busy || !matches.length) return
+    if (unsavedParagraphCount(article)) {
+      toast('请先保存或丢弃未保存的段落，再执行替换。', true)
+      return
+    }
+    const blockId = scope === 'one' ? currentMatch?.id : null
+    if (scope === 'one' && !blockId) return
+    const result = await replaceArticleText({
+      id: article.id,
+      find: query,
+      replace: replaceText,
+      caseSensitive,
+      ...(blockId ? { blockId } : {}),
+    })
+    if (result && result.count > 0) {
+      toast(`已替换 ${result.count} 处（涉及 ${result.blocks} 段），可撤销`)
+    } else if (result) {
+      toast('没有找到可替换的内容')
+    }
+  }
+
+  return (
+    <div className="ws-findbar" role="search" aria-label="文内查找与替换" onKeyDown={event => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }}>
+      <div className="ws-findbar-row">
+        <div className="ws-findbar-input">
+          <Icon name="search" size={14} />
+          <input ref={inputRef} type="search" aria-label="查找正文内容" placeholder="查找正文关键词…" value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                onStep(event.shiftKey ? -1 : 1)
+              }
+            }} />
+          <button type="button" className={`ws-findbar-flag ${caseSensitive ? 'is-on' : ''}`}
+            aria-pressed={caseSensitive} title="区分大小写" onClick={() => setCaseSensitive(v => !v)}>Aa</button>
+        </div>
+        <span className="ws-findbar-count ws-muted ws-small" role="status">
+          {!query ? '输入关键词' : matches.length ? `第 ${activeIndex + 1} / ${matches.length} 段（共 ${totalOccurrences} 处）` : '无匹配'}
+        </span>
+        <button type="button" className="ws-btn ws-editor-mini" disabled={!matches.length} title="上一处（Shift + Enter）" onClick={() => onStep(-1)}><Icon name="arrowUp" size={13} /></button>
+        <button type="button" className="ws-btn ws-editor-mini" disabled={!matches.length} title="下一处（Enter）" onClick={() => onStep(1)}><Icon name="arrowDown" size={13} /></button>
+        <button type="button" className="ws-link" aria-expanded={showReplace} onClick={() => setShowReplace(v => !v)}>{showReplace ? '收起替换' : '替换'}</button>
+        <button type="button" className="ws-icon-btn" aria-label="关闭查找" onClick={onClose}><Icon name="close" size={14} /></button>
+      </div>
+      {showReplace ? (
+        <div className="ws-findbar-row ws-findbar-replace">
+          <input type="text" className="ws-findbar-replace-input" aria-label="替换为" placeholder="替换为…" value={replaceText}
+            onChange={e => setReplaceText(e.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                void runReplace('one')
+              }
+            }} />
+          <button type="button" className="ws-btn" disabled={busy || !currentMatch} onClick={() => void runReplace('one')}>替换当前段</button>
+          <button type="button" className="ws-btn is-primary" disabled={busy || !matches.length} onClick={() => void runReplace('all')}>全部替换</button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function PaperModule({ data }) {
   const view = useStudio(s => s.view)
   const chatOpen = useStudio(s => s.chatOpen)
@@ -2740,9 +3086,56 @@ function PaperModule({ data }) {
   const [reviewPulse, setReviewPulse] = React.useState(null)
   const pulseTimer = React.useRef(null)
   const [side, setSide] = React.useState(null)
+  const [searchOpen, setSearchOpen] = React.useState(false)
+  const [searchQuery, setSearchQuery] = React.useState('')
+  const [searchCase, setSearchCase] = React.useState(false)
+  const [searchIdx, setSearchIdx] = React.useState(0)
   const sideTabId = React.useId()
   const article = data.current
   React.useEffect(() => () => clearTimeout(pulseTimer.current), [])
+  React.useEffect(() => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    setSearchIdx(0)
+  }, [article?.id])
+  React.useEffect(() => {
+    if (view !== 'paper') setSearchOpen(false)
+  }, [view])
+  React.useEffect(() => {
+    const onKeyDown = event => {
+      if (view !== 'paper' || !article?.blocks?.length) return
+      if (getState().dialog) return
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        setSearchOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [view, article?.blocks?.length])
+  const searchMatches = React.useMemo(() => {
+    if (!searchOpen || !searchQuery || !article?.blocks?.length) return []
+    const needle = searchCase ? searchQuery : searchQuery.toLowerCase()
+    const list = []
+    for (const block of article.blocks) {
+      const hay = searchCase ? block.text : block.text.toLowerCase()
+      let count = 0
+      let pos = 0
+      while ((pos = hay.indexOf(needle, pos)) !== -1) {
+        count += 1
+        pos += needle.length
+      }
+      if (count > 0) list.push({ id: block.id, count })
+    }
+    return list
+  }, [searchOpen, searchQuery, searchCase, article?.blocks])
+  const searchMatchedIds = React.useMemo(
+    () => searchMatches.length ? new Set(searchMatches.map(m => m.id)) : null,
+    [searchMatches],
+  )
+  React.useEffect(() => {
+    setSearchIdx(prev => searchMatches.length ? Math.min(prev, searchMatches.length - 1) : 0)
+  }, [searchMatches.length])
   if (!article) return <Empty model={data.model} />
   const sideTab = side?.articleId === article.id ? side.tab : 'article'
   const selectSideTab = tab => setSide({ articleId: article.id, tab })
@@ -2764,6 +3157,12 @@ function PaperModule({ data }) {
     if (focus) row?.querySelector('.ws-block, .ws-edit')?.focus({ preventScroll: true })
     row?.scrollIntoView({ block: 'center', behavior: scrollBehavior() })
   }
+  const stepSearch = delta => {
+    if (!searchMatches.length) return
+    const next = (searchIdx + delta + searchMatches.length) % searchMatches.length
+    setSearchIdx(next)
+    jumpToReview(searchMatches[next].id, false)
+  }
   const flagged = article.blocks.filter(b => b.check?.status === 'flag').length
   const retest = article.blocks.filter(b => b.check?.status === 'fixed').length
   return (
@@ -2779,6 +3178,10 @@ function PaperModule({ data }) {
           <button type="button" role="tab" aria-selected={view === 'layout'} className={view === 'layout' ? 'is-on' : ''} onClick={() => openArticleView(article, 'layout')}>排版预览</button>
           <button type="button" role="tab" aria-selected={view === 'derive'} className={view === 'derive' ? 'is-on' : ''} onClick={() => setState({ view: 'derive', editing: null })}>一稿多发{hasUnsavedDeriveDrafts(article.id, deriveDrafts) ? <i className="ws-derive-tab-dot" aria-label="有未保存修改" /> : null}</button>
         </SlidingTabs>
+        {view === 'paper' && article.blocks.length ? (
+          <button type="button" className="ws-icon-btn" aria-label="文内查找与替换" title="文内查找与替换（⌘ / Ctrl + F）" aria-pressed={searchOpen}
+            onClick={() => setSearchOpen(open => !open)}><Icon name="search" /></button>
+        ) : null}
         {article.canUndo ? <button type="button" className="ws-btn" disabled={Boolean(article.job)} onClick={() => setState({ dialog: 'revisions' })}>改稿对比</button> : null}
         {article.canUndo ? <button type="button" className="ws-icon-btn" aria-label="撤销上一步" title="撤销上一步" disabled={Boolean(article.job)} onClick={() => act('undo')}><Icon name="undo" /></button> : null}
         <button type="button" className="ws-icon-btn" aria-label={chatOpen ? '收起改稿对话' : '打开改稿对话'} aria-pressed={chatOpen} onClick={() => setState({ chatOpen: !chatOpen })}><Icon name="chat" /></button>
@@ -2816,9 +3219,23 @@ function PaperModule({ data }) {
           </div>
         ) : null}
         <main className="ws-main">
+          {view === 'paper' && searchOpen ? (
+            <PaperSearchBar
+              article={article}
+              query={searchQuery}
+              setQuery={value => { setSearchQuery(value); setSearchIdx(0) }}
+              caseSensitive={searchCase}
+              setCaseSensitive={setSearchCase}
+              matches={searchMatches}
+              activeIndex={searchIdx}
+              onStep={stepSearch}
+              onClose={() => setSearchOpen(false)}
+              busy={Boolean(article.job)}
+            />
+          ) : null}
           {view === 'layout' ? <LayoutView article={article} brand={data.brand} mp={data.mp} />
             : view === 'derive' ? <DeriveView article={article} brand={data.brand} />
-              : <Paper article={article} reviewTarget={reviewTarget} reviewPulse={reviewPulse} />}
+              : <Paper article={article} reviewTarget={reviewTarget} reviewPulse={reviewPulse} searchMatchedIds={searchMatchedIds} />}
         </main>
         {view === 'paper' ? <SidePane key={article.id} article={article} tab={sideTab} onTab={selectSideTab} tabId={sideTabId} flagged={flagged} retest={retest} ready={data.zhuqueReady} reviewTarget={reviewTarget} onReviewJump={jumpToReview} cloudinaryReady={data.cloudinaryReady} unsavedCount={unsavedParagraphCount(article)} /> : null}
       </div>

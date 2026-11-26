@@ -69,6 +69,7 @@ import { createVersionChecker } from './version.js'
 import { detect } from './zhuque.js'
 import { draftSvgCard, insertSvgCard, previewSvgCard } from './svg-cards.js'
 import { latestCover, pushWechatDraft, verifyCredentials } from './wechat.js'
+import { MAX_DIGEST, sliceUtf16Safe } from './wechat-meta.js'
 import { normalizeStyleProfile } from './writing-style-shared.js'
 import { analyzeWritingStyle, applyWritingStyle, previewWritingStyle, readStyleState, renderHeadlineSkill, renderWriterSkill, restoreDefaultStyle } from './writing-style.js'
 
@@ -1533,6 +1534,18 @@ export async function route(deps, req, res) {
         touch(article)
       })
       return ok()
+    case 'summary/update':
+      await store.update(state => {
+        const article = mustFind(state, body.id)
+        mustActive(article, '归档稿件不能修改摘要，请先恢复。')
+        notBusy(pipeline, article.id)
+        const normalized = String(body.text ?? '').replace(/\s+/g, ' ').trim()
+        const value = sliceUtf16Safe(normalized, MAX_DIGEST)
+        if (value === (article.summary ?? '')) return
+        article.summary = value
+        touch(article)
+      })
+      return ok()
     case 'block/append':
       await store.update(state => {
         const article = mustFind(state, body.id)
@@ -1542,11 +1555,80 @@ export async function route(deps, req, res) {
         if (!value) throw Object.assign(new Error('请输入正文内容。'), { status: 400 })
         const pieces = splitMarkdown(value, { bodyOnly: true }).blocks
         const texts = pieces.length ? pieces : [value]
-        snapshot(article, '手写正文')
-        article.blocks.push(...texts.map(text => ({ id: newId(), text, check: null })))
+        const inserted = texts.map(text => ({ id: newId(), text, check: null }))
+        if (body.afterBlockId) {
+          const anchor = mustBlock(article, body.afterBlockId)
+          const index = article.blocks.indexOf(anchor)
+          snapshot(article, '插入段落')
+          article.blocks.splice(index + 1, 0, ...inserted)
+        } else {
+          snapshot(article, '手写正文')
+          article.blocks.push(...inserted)
+        }
         touch(article)
       })
       return ok()
+    case 'block/move':
+      await store.update(state => {
+        const article = mustFind(state, body.id)
+        mustActive(article, '归档稿件不能调整段落顺序，请先恢复。')
+        notBusy(pipeline, article.id)
+        const direction = body.direction
+        if (direction !== 'up' && direction !== 'down') {
+          throw Object.assign(new Error('请指定上移或下移方向。'), { status: 400 })
+        }
+        const block = mustBlock(article, body.blockId)
+        const index = article.blocks.indexOf(block)
+        const target = direction === 'up' ? index - 1 : index + 1
+        if (target < 0 || target >= article.blocks.length) return
+        snapshot(article, '调整段落顺序')
+        ;[article.blocks[index], article.blocks[target]] = [article.blocks[target], article.blocks[index]]
+        touch(article)
+      })
+      return ok()
+    case 'block/replace-all': {
+      const find = typeof body.find === 'string' ? body.find : ''
+      if (!find) throw Object.assign(new Error('请输入要查找的内容。'), { status: 400 })
+      const replacement = typeof body.replace === 'string' ? body.replace : ''
+      const caseSensitive = body.caseSensitive === true
+      const escaped = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const regex = new RegExp(escaped, caseSensitive ? 'g' : 'gi')
+      let replacedCount = 0
+      let replacedBlocks = 0
+      await store.update(state => {
+        const article = mustFind(state, body.id)
+        mustActive(article, '归档稿件不能替换正文，请先恢复。')
+        notBusy(pipeline, article.id)
+        const targets = body.blockId ? [mustBlock(article, body.blockId)] : article.blocks
+        const updates = []
+        for (const block of targets) {
+          let hits = 0
+          const nextText = block.text.replace(regex, () => {
+            hits += 1
+            return replacement
+          })
+          if (!hits || nextText === block.text) continue
+          if (nextText.length > 20000) {
+            throw Object.assign(new Error('替换后部分段落超过 20000 字符上限，请缩短替换内容。'), { status: 400 })
+          }
+          updates.push({ block, nextText, hits })
+          replacedCount += hits
+          replacedBlocks += 1
+        }
+        if (!updates.length) return
+        snapshot(article, body.blockId ? '段落替换' : '全文替换')
+        for (const { block, nextText } of updates) {
+          block.text = nextText.trim()
+          block.check = null
+        }
+        article.blocks = article.blocks.filter(block => block.text)
+        touch(article)
+      })
+      return json(res, 200, {
+        ...(await snapshotState(ctx, store, pipeline, prepStore)),
+        replaced: { count: replacedCount, blocks: replacedBlocks },
+      })
+    }
     case 'block/update':
       await store.update(state => {
         const article = mustFind(state, body.id)

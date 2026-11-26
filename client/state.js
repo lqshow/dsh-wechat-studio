@@ -11,7 +11,7 @@ export function countCurrentParagraphDrafts(blocks, drafts) {
   return blocks.filter(block => drafts.has(block.id)).length
 }
 
-let snap = { data: null, error: null, view: 'paper', paperHome: true, dialog: null, toast: null, editing: null, layout: null, deriveDrafts: {}, dismissedXhsErrors: {}, pending: null, chatOpen: true, bannerTried: {}, module: 'paper', skills: null, style: null, styleWizardStep: 1, styleWizardReturnTo: null, newDialogDraft: null, settings: null, update: null, insights: null, insightsRange: 'all', insightsError: null, insightsRulePreview: null, svgCardCandidate: null, coverStyles: null, customCoverWizard: { open: false, mode: 'create', styleId: null, returnTo: null, draftSession: null }, selectedCoverStyleId: null, prep: null, activeBagId: null, quickCaptureOpen: false }
+let snap = { data: null, error: null, view: 'paper', paperHome: true, dialog: null, toast: null, editing: null, layout: null, deriveDrafts: {}, dismissedXhsErrors: {}, pending: null, chatOpen: true, chatDraftSeed: null, bannerTried: {}, module: 'paper', skills: null, style: null, styleWizardStep: 1, styleWizardReturnTo: null, newDialogDraft: null, settings: null, update: null, insights: null, insightsRange: 'all', insightsError: null, insightsRulePreview: null, svgCardCandidate: null, coverStyles: null, customCoverWizard: { open: false, mode: 'create', styleId: null, returnTo: null, draftSession: null }, selectedCoverStyleId: null, prep: null, activeBagId: null, quickCaptureOpen: false }
 const listeners = new Set()
 let timer = null
 let stateRequest = 0
@@ -124,6 +124,20 @@ export async function reimportMarkdown(body) {
   const data = await postJson('articles/reimport', body)
   accept(data)
   return data
+}
+
+export async function replaceArticleText(body) {
+  setState({ pending: 'block/replace-all' })
+  try {
+    const data = await postJson('block/replace-all', { id: snap.data?.current?.id, ...body })
+    accept(data)
+    return data.replaced ?? { count: 0, blocks: 0 }
+  } catch (err) {
+    toast(err.message, true)
+    return null
+  } finally {
+    setState({ pending: null })
+  }
 }
 
 export async function refresh() {
