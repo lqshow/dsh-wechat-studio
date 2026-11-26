@@ -118,7 +118,15 @@ async function submitPromotion(payload = null) {
   promotionInFlight = true
   setState({ promotionInFlight: true })
   try {
-    const result = await prepAct('prep/bags/promote', pendingPromotion)
+    const result = await prepAct('prep/bags/promote', pendingPromotion, {
+      onError: err => {
+        const status = err?.status
+        const isTransientLock = status === 409 && /锁超时/.test(String(err?.message ?? ''))
+        if (status >= 400 && status < 500 && status !== 408 && status !== 429 && !isTransientLock) {
+          savePendingPromotion(null)
+        }
+      },
+    })
     if (!result?.articleId || !await openArticleInPaper(result.articleId)) return null
     savePendingPromotion(null)
     return result

@@ -3952,6 +3952,7 @@ body[data-ds-dark-theme] .ws-prep-drawer-head.is-sponsored .ws-prep-drawer-title
   border: 1px solid var(--line);
   font-size: 12px;
   color: var(--ink);
+  overflow-wrap: anywhere;
 }
 .ws-prep-brief-pill span { overflow-wrap: anywhere; }
 .ws-prep-brief-pill button {

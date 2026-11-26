@@ -933,7 +933,7 @@ export async function loadPrep() {
   }
 }
 
-export async function prepAct(path, body = {}, { method, refreshState, quiet = false } = {}) {
+export async function prepAct(path, body = {}, { method, refreshState, quiet = false, onError } = {}) {
   const sequence = refreshState === false ? null : ++prepRequest
   const stateAtStart = stateRequest
   const resolvedMethod = method ?? (PREP_PATCH_PATHS.has(path) ? 'PATCH' : 'POST')
@@ -963,6 +963,7 @@ export async function prepAct(path, body = {}, { method, refreshState, quiet = f
     }
     return result
   } catch (err) {
+    if (typeof onError === 'function') onError(err)
     if (!quiet) toast(err.message, true)
     return null
   } finally {

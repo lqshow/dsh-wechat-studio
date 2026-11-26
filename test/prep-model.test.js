@@ -257,3 +257,21 @@ test('核心卖点在句末分段，保留文字、手工分段和存储上限',
   const atLimit = original.padEnd(500, '字')
   assert.equal(formatSellingPoints(atLimit), atLimit)
 })
+
+test('prepAct 失败时向 onError 透传带状态码的错误对象', async t => {
+  const { prepAct } = await import('../client/state.js')
+  const originalFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = originalFetch })
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: '袋子已成稿' }), {
+    status: 409,
+    headers: { 'content-type': 'application/json' },
+  })
+  let captured = null
+  const res = await prepAct('prep/bags/promote', { bagId: 'bag_1', mode: 'blank' }, {
+    quiet: true,
+    onError: err => { captured = err },
+  })
+  assert.equal(res, null)
+  assert.equal(captured?.status, 409)
+  assert.equal(captured?.message, '袋子已成稿')
+})

@@ -758,6 +758,10 @@ test('甲方原文文件导入提取 PDF 和 Word 内容，不调用模型或写
   const tooLong = await upload('过长.docx', wordFile('字'.repeat(20_001)))
   assert.equal(tooLong.status, 422)
   assert.match(tooLong.body.error, /20,000/)
+  const hugeXml = await upload('超大XML.docx', Buffer.from(createZip([
+    { name: 'word/document.xml', data: encoder.encode(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${'a'.repeat(4 * 1024 * 1024 + 32)}</w:t></w:r></w:p></w:body></w:document>`) },
+  ])))
+  assert.equal(hugeXml.status, 422)
   assert.equal((await upload('假文档.docx', pdf)).status, 400)
   assert.equal((await upload('旧版.doc', wordFile('原文'))).status, 400)
 })

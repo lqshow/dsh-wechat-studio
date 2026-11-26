@@ -31,8 +31,17 @@ export async function docxToText(buffer) {
       if (entry.uncompressedSize > MAX_XML_BYTES || parts.has(entry.fileName)) {
         throw new Error('Invalid Word document part')
       }
+      const stream = await zip.openReadStreamPromise(entry)
       const chunks = []
-      for await (const chunk of await zip.openReadStreamPromise(entry)) chunks.push(chunk)
+      let totalBytes = 0
+      for await (const chunk of stream) {
+        totalBytes += chunk.length
+        if (totalBytes > MAX_XML_BYTES) {
+          stream.destroy()
+          throw new Error('Word document part exceeds size limit')
+        }
+        chunks.push(chunk)
+      }
       parts.set(entry.fileName, Buffer.concat(chunks))
     }
   } finally {
