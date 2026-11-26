@@ -102,16 +102,19 @@ export function balanceXhsArtboard(root, sheet) {
   // Give stacked entries room to breathe inside a tall column. Only keep
   // spacing that reduces measured gaps after text has wrapped at its new size.
   const textRules = accepted
-  for (const padding of [10, 24, 40, 56]) {
-    const rules = [...sizes.keys()].filter(el =>
-      ['block', 'table-cell'].includes(getComputedStyle(el).display) &&
-      !el.style.padding && !el.style.paddingBlock)
-      .map(el => paths.get(el) + '{padding-block:' + padding + 'px}')
-    sheet.textContent = textRules + rules.join('\n')
-    const next = measure(root, nodes)
-    if (mainOverflow(main) <= 3 && next.overflow <= 1 && next.score < best.score && !hasClippedContent(elements)) {
-      accepted = sheet.textContent
-      best = next
+  const blockCandidates = [...sizes.keys()].filter(el =>
+    ['block', 'table-cell'].includes(getComputedStyle(el).display) &&
+    !el.style.padding && !el.style.paddingBlock)
+  if (blockCandidates.length) {
+    for (const padding of [10, 24, 40, 56]) {
+      const rules = blockCandidates.map(el => paths.get(el) + '{padding-block:' + padding + 'px}')
+      sheet.textContent = textRules + rules.join('\n')
+      const next = measure(root, nodes)
+      if (mainOverflow(main) > 3 || next.overflow > 1 || hasClippedContent(elements)) break
+      if (next.score < best.score) {
+        accepted = sheet.textContent
+        best = next
+      }
     }
   }
   sheet.textContent = accepted

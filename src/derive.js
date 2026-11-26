@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { callModel, configuredModelMaxTokens, extractJson, loadSkill } from './ai.js'
+import { callModel, configuredModelMaxTokens, extractJson, loadSkill, modelVisionSupport } from './ai.js'
 import { touch } from './article.js'
 import { portableBlocks } from './derive-markdown.js'
 import {
@@ -30,6 +30,19 @@ const MAX_DERIVE_INPUT_CHARS = 30_000
 const XHS_BLUEPRINT_MAX_TOKENS = 6144
 const XHS_BLUEPRINT_RETRY_MAX_TOKENS = 16_384
 const XHS_SINGLE_CARD_TIMEOUT_MS = 240_000
+const XHS_STAGE2_CARD_TIMEOUT_MS = 120_000
+const XHS_STAGE2_CONCURRENCY = 5
+const XHS_STAGE2_CARD_BLOCKS_MAX_CHARS = 6_000
+const XHS_STAGE2_FALLBACK_BLOCKS_MAX_CHARS = 8_000
+const XHS_RATE_LIMIT_RE = /429|rate[_ -]?limit|too many requests|quota|throttl|限流|请求过于频繁/i
+const DEDUP_SUGGESTED_ARCHETYPES = [
+  '对照表（<table> 左右/上下对比）',
+  '双栏 Bento 矩阵（grid-template-columns: 1fr 1fr）',
+  '编号轨道时间轴（<ol> 步骤流）',
+  '大字 KPI 指标看板（2×2 数据网格）',
+  '编辑部大号引言卡（<blockquote> + 双列启示）',
+  '规格参数清单卡（<ul> 结构化要点）',
+]
 const fail = (message, status = 400, extra = {}) => Object.assign(new Error(message), { status }, extra)
 
 export function extractArticleImages(article) {
@@ -136,7 +149,7 @@ function platformContractSection(platform, variant) {
     '- 若 user payload 携带 referenceImageIds，必须同时输出 referencePlan：images 记录每张有效图片的 id、role（cover | content | style）与简短 reason；sharedImageIds 最多 1 个且只能是 style；pages 只列出有专属参考图的页面，每页去重后最多 2 个 ID。',
     '- cover 图只能分配给第 1 页，content 图不能分配给封面；参考图可跨页复用，未分配页面自由设计，不要求每张图都使用。不得编造 referenceImageIds 之外的图片 ID。',
     '- referencePlan 只写 ID、角色、理由和页码，不得写入 Base64、Data URL 或其他图片数据。',
-    '- 本阶段请返回 <xhs-meta>...</xhs-meta>（严格合法 JSON，cards 中不要塞入 html 字段，下一步会分批精绘每页自由 HTML）以及可选的 <xhs-style>...</xhs-style>（整套补充 CSS，≤ 4000 字符，所有主色必须使用 var(--xhs-*) 变量）。',
+    '- 本阶段请返回 <xhs-meta>...</xhs-meta>（严格合法 JSON，cards 中不要塞入 html 字段，下一步会并行精绘每页自由 HTML）以及可选的 <xhs-style>...</xhs-style>（仅放跨页共享的精简公共类，建议 ≤ 1200 字符、上限 4000 字符，如内置 .cd-* 类已足够可直接省略；所有主色必须使用 var(--xhs-*) 变量）。',
     '输出格式示例：',
     '<xhs-meta>{"deckStyle":"tech","tweaks":{"preset":"claude"},"title":"","body":"","tags":[""],"cards":[{"kind":"cover","layoutArchetype":"editorial-hero-window","badge":"","heading":"","accent":"","lines":[""],"callout":"","tags":[""],"imageUrl":"","source":["来源段落id"]}],"referencePlan":{"images":[{"id":"ref-1","role":"cover","reason":"巨型标题和主视觉窗口，适合封面"},{"id":"ref-2","role":"content","reason":"三阶段时间轴，适合步骤页"},{"id":"ref-3","role":"style","reason":"暖色便签和细线网格，可统一整套气质"}],"sharedImageIds":["ref-3"],"pages":[{"page":1,"imageIds":["ref-1"]},{"page":3,"imageIds":["ref-2"]},{"page":5,"imageIds":["ref-2"]}]}}</xhs-meta>',
     '<xhs-style>.xhs-artboard .story-kicker { color: var(--xhs-accent); font-weight: 800; }</xhs-style>',
@@ -358,6 +371,67 @@ function parseXhsBatchCardsMarkup(rawText, batchIndices) {
   return results
 }
 
+function selectBlocksForCards(allBlocks, targetCards) {
+  if (!Array.isArray(allBlocks) || !allBlocks.length) return []
+  const sourceIds = new Set()
+  for (const card of targetCards) {
+    for (const id of Array.isArray(card?.source) ? card.source : []) {
+      if (typeof id === 'string' && id) sourceIds.add(id)
+    }
+  }
+  if (sourceIds.size > 0) {
+    const pickedIndices = new Set()
+    for (let i = 0; i < allBlocks.length; i++) {
+      if (!sourceIds.has(allBlocks[i]?.id)) continue
+      pickedIndices.add(i)
+      // 保留紧邻的上一条标题段落作为章节语义锚点
+      if (i > 0 && /^\s*#{1,6}\s/.test(String(allBlocks[i - 1]?.text ?? ''))) {
+        pickedIndices.add(i - 1)
+      }
+    }
+    if (pickedIndices.size > 0) {
+      const ordered = [...pickedIndices].sort((a, b) => a - b).map(i => allBlocks[i])
+      return truncateBlocks(ordered, XHS_STAGE2_CARD_BLOCKS_MAX_CHARS)
+    }
+  }
+  if (targetCards.length && targetCards.every(card => card?.kind === 'end')) {
+    return truncateBlocks(allBlocks.slice(0, 1), 600)
+  }
+  if (targetCards.length && targetCards.every(card => card?.kind === 'cover')) {
+    return truncateBlocks(allBlocks.slice(0, 3), 2500)
+  }
+  return truncateBlocks(allBlocks, XHS_STAGE2_FALLBACK_BLOCKS_MAX_CHARS)
+}
+
+function selectArticleImagesForCards(allImages, targetCards) {
+  if (!Array.isArray(allImages) || !allImages.length) return []
+  const wantedUrls = new Set(
+    targetCards
+      .map(card => (typeof card?.imageUrl === 'string' ? card.imageUrl.trim() : ''))
+      .filter(Boolean),
+  )
+  if (wantedUrls.size > 0) {
+    const matched = allImages.filter(img => wantedUrls.has(img?.url))
+    if (matched.length) return matched
+  }
+  if (targetCards.some(card => card?.kind === 'cover')) {
+    return allImages.slice(0, 3)
+  }
+  return []
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+  const limit = Math.max(1, Math.min(concurrency, items.length || 1))
+  let cursor = 0
+  const runners = Array.from({ length: limit }, async () => {
+    while (cursor < items.length) {
+      const pos = cursor++
+      await worker(items[pos], pos)
+    }
+  })
+  await Promise.all(runners)
+}
+
 function buildXhsBatchCardsPrompt({ article, prepared, deck, batchIndices, userInstruction = '' }) {
   const selectedByCard = batchIndices.map(index => selectXhsReferenceImages(
     prepared.referenceImages,
@@ -379,15 +453,15 @@ function buildXhsBatchCardsPrompt({ article, prepared, deck, batchIndices, userI
     referenceImageIds: selectedByCard[batchIndex].map(image => image.id),
   }))
   const hasRefs = images.length > 0
+  // 保持 Stage 2 system prompt 在同套卡片的并行调用之间完全稳定（不含动态页数/图片数），以最大化 LLM KV Prefix Cache 命中率
   const system = [
     String(prepared.skill ?? '').trim(),
     [
       '# 阶段 2：分批自由 HTML/CSS 精绘任务',
-      `请只为本次指定的 ${batchIndices.length} 页小红书卡片（1080×1440 .xhs-artboard 内部 HTML）设计高设计感、互不重样的自由 HTML 与可选单页 CSS。`,
-      userInstruction ? `- 用户对本次目标页的明确想法（最高优先级）：${userInstruction}` : '',
+      '请只为本次 targetCards 指定的目标页小红书卡片（1080×1440 .xhs-artboard 内部 HTML）设计高设计感、互不重样的自由 HTML 与可选单页 CSS。',
       '- 每一页的 DOM 排版结构必须贴合该页的 layoutArchetype 与内容语义，绝不套用千篇一律的列表模板，也不要和相邻页使用相同的版式拓扑。',
       hasRefs
-        ? `- 视觉参考图（高优先级，本批共 ${images.length} 张）：只使用本页 referenceImageIds 指定的参考图，优先还原其构图比例、排版层级、装饰线条、边框圆角与信息区块组织方式，再处理页面差异化，不得为了差异化牺牲参考图的关键视觉结构。若参考图为单列纵向布局，禁止改成左右分栏；主要区域的上下顺序和层级关系必须保持一致，不得新增或删除主要区域。具体装饰图标必须使用内联 SVG/CSS 还原同类造型，不得用 emoji 或普通文本字符随意替代；禁止把其他页面的专属构图复制过来，不要照抄参考图中的文字或品牌名。`
+        ? '- 视觉参考图（高优先级）：只使用本页 referenceImageIds 指定的参考图，优先还原其构图比例、排版层级、装饰线条、边框圆角与信息区块组织方式，再处理页面差异化，不得为了差异化牺牲参考图的关键视觉结构。若参考图为单列纵向布局，禁止改成左右分栏；主要区域的上下顺序和层级关系必须保持一致，不得新增或删除主要区域。具体装饰图标必须使用内联 SVG/CSS 还原同类造型，不得用 emoji 或普通文本字符随意替代；禁止把其他页面的专属构图复制过来，不要照抄参考图中的文字或品牌名。'
         : '',
       XHS_LAYOUT_RULE,
       '- 色彩正交铁律：品牌主色必须使用 var(--xhs-accent)、var(--xhs-tint)、var(--xhs-accent-line) 等主题变量。优先保持参考图的明暗关系与中性色（黑/白/灰），参考图中本身为黑/白/灰的框体不要改写成 var(--xhs-dark) 或其他主题色；小面积多彩装饰图标可用独立的 --ref-* CSS 变量还原参考色，不要强行映射成品牌主色。',
@@ -395,9 +469,12 @@ function buildXhsBatchCardsPrompt({ article, prepared, deck, batchIndices, userI
       '- 禁止 <script>、<style>、<iframe>、on* 事件属性、@import、外部 url(...) 与 position: fixed。',
       '- 只用原文 blocks 与卡片字段中的真实事实，不编造新数字。',
       '- 严格只输出 <xhs-page-style page="N">（可选）与 <xhs-card page="N"> 原生标签，不要输出 JSON 或多余解释。',
+      userInstruction ? `- 用户对本次目标页的明确想法（最高优先级）：${userInstruction}` : '',
     ].filter(Boolean).join('\n'),
   ].filter(Boolean).join('\n\n')
 
+  const scopedBlocks = selectBlocksForCards(prepared.blocks, targetCards)
+  const scopedImages = selectArticleImagesForCards(prepared.images, targetCards)
   const user = JSON.stringify({
     title: String(article?.title ?? ''),
     ...(prepared.designPrompt ? { designPrompt: prepared.designPrompt } : {}),
@@ -412,8 +489,8 @@ function buildXhsBatchCardsPrompt({ article, prepared, deck, batchIndices, userI
       topology: c.html ? computeDomTopologySignature(c.html) : '',
     })),
     targetCards,
-    ...(prepared.images?.length ? { images: prepared.images } : {}),
-    blocks: prepared.blocks,
+    ...(scopedImages.length ? { images: scopedImages } : {}),
+    blocks: scopedBlocks,
   })
   return { system, user, images }
 }
@@ -452,6 +529,8 @@ function buildSingleCardRedesignPrompt({ article, blocks, images, deck, cardInde
     ].filter(Boolean).join('\n'),
   ].filter(Boolean).join('\n\n')
 
+  const scopedBlocks = selectBlocksForCards(blocks, [targetCard])
+  const scopedImages = selectArticleImagesForCards(images, [targetCard])
   const user = JSON.stringify({
     title: String(article?.title ?? ''),
     deckDesignPrompt: deck.designPrompt || '',
@@ -468,8 +547,8 @@ function buildSingleCardRedesignPrompt({ article, blocks, images, deck, cardInde
     targetCard,
     ...(cardPrompt ? { cardPrompt } : {}),
     ...(cleanRefImages.length ? { referenceImageCount: cleanRefImages.length } : {}),
-    ...(images?.length ? { images } : {}),
-    blocks,
+    ...(scopedImages.length ? { images: scopedImages } : {}),
+    blocks: scopedBlocks,
   })
   return { system, user }
 }
@@ -532,7 +611,7 @@ function parseSingleCardModelOutput(raw) {
   return null
 }
 
-async function runSingleCardModelCall(ctx, prompt, { maxTokens = 6144, images = [], onImageFallback } = {}) {
+async function runSingleCardModelCall(ctx, prompt, { maxTokens = 6144, images = [], onImageFallback, visionSupport, attachmentCache } = {}) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const userMessage = attempt === 0
       ? prompt.user
@@ -548,6 +627,8 @@ async function runSingleCardModelCall(ctx, prompt, { maxTokens = 6144, images = 
         user: userMessage,
         images,
         onImageFallback,
+        visionSupport,
+        attachmentCache,
         task: 'derive-xhs-card',
         maxTokens,
         signal,
@@ -564,176 +645,214 @@ async function runSingleCardModelCall(ctx, prompt, { maxTokens = 6144, images = 
   return null
 }
 
-async function synthesizeStagedXhsHtml(ctx, { article, prepared, deck, onCardReady, onStage, onImageFallback } = {}) {
+function isRateLimitError(err) {
+  return err?.status === 429 || XHS_RATE_LIMIT_RE.test(String(err?.message ?? err ?? ''))
+}
+
+async function synthesizeStagedXhsHtml(ctx, {
+  article,
+  prepared,
+  deck,
+  onCardReady,
+  onActiveChange,
+  onStage,
+  onImageFallback,
+  visionSupport,
+  attachmentCache,
+  concurrency = XHS_STAGE2_CONCURRENCY,
+} = {}) {
   const nextCards = deck.cards.map(c => ({ ...c }))
   const refImages = prepared.referenceImages ?? []
   const missingIndices = nextCards
     .map((c, idx) => (c.html ? -1 : idx))
     .filter(idx => idx >= 0)
 
-  // 阶段 2：按每批 3 页分批精绘自由 HTML/CSS；通过 onText 流式解析，每闭合一张 <xhs-card> 立即回调展示！
-  const BATCH_SIZE = 3
-  for (let start = 0; start < missingIndices.length; start += BATCH_SIZE) {
-    const batch = missingIndices.slice(start, start + BATCH_SIZE)
-    const batchPrompt = buildXhsBatchCardsPrompt({
+  const resolvedConcurrency = Math.max(1, Math.min(8, Number(concurrency) || XHS_STAGE2_CONCURRENCY))
+  const completedDone = new Set()
+  const inFlightSet = new Set()
+  const notifyActive = () => {
+    onActiveChange?.([...inFlightSet].sort((a, b) => a - b))
+  }
+  let writeChain = Promise.resolve()
+
+  const scheduleCardReady = idx => {
+    if (!onCardReady) return Promise.resolve()
+    const snapshotCard = nextCards[idx]
+    const snapshotCards = nextCards.map(c => ({ ...c }))
+    const activeSnapshot = [...inFlightSet].sort((a, b) => a - b)
+    writeChain = writeChain.then(() => onCardReady(idx, snapshotCard, snapshotCards, activeSnapshot)).catch(() => {})
+    return writeChain
+  }
+
+  const commitCard = (idx, hit) => {
+    if (completedDone.has(idx) || !hit?.html) return false
+    completedDone.add(idx)
+    inFlightSet.delete(idx)
+    nextCards[idx] = {
+      ...nextCards[idx],
+      html: hit.html,
+      ...(hit.pageCss ? { pageCss: hit.pageCss } : {}),
+      ...(hit.layoutArchetype ? { layoutArchetype: hit.layoutArchetype } : {}),
+    }
+    scheduleCardReady(idx)
+    return true
+  }
+
+  // 阶段 2：按单页并发池精绘自由 HTML/CSS（每页独立上下文 + 共享 system 前缀缓存），
+  // 任意一页闭合后立即回调落盘展示，且单页截断/限流不会阻塞其他页面！
+  await runWithConcurrency(missingIndices, resolvedConcurrency, async idx => {
+    inFlightSet.add(idx)
+    notifyActive()
+    const cardPrompt = buildXhsBatchCardsPrompt({
       article,
       prepared,
       deck: { ...deck, cards: nextCards },
-      batchIndices: batch,
+      batchIndices: [idx],
     })
-    let parsedMap = new Map()
-    const streamedDone = new Set()
-    let streamBuf = ''
-    let writeChain = Promise.resolve()
-    const emitCard = (idx, hit) => {
-      if (streamedDone.has(idx) || !hit?.html) return
-      streamedDone.add(idx)
-      nextCards[idx] = {
-        ...nextCards[idx],
-        html: hit.html,
-        ...(hit.pageCss ? { pageCss: hit.pageCss } : {}),
-        ...(hit.layoutArchetype ? { layoutArchetype: hit.layoutArchetype } : {}),
-      }
-      if (onCardReady) {
-        const snapshotCard = nextCards[idx]
-        const snapshotCards = nextCards.map(c => ({ ...c }))
-        writeChain = writeChain.then(() => onCardReady(idx, snapshotCard, snapshotCards)).catch(() => {})
-      }
+
+    let hit = null
+    let rateLimited = false
+    try {
+      const raw = await callModel(ctx, {
+        system: cardPrompt.system,
+        user: cardPrompt.user,
+        images: cardPrompt.images,
+        onImageFallback,
+        visionSupport,
+        attachmentCache,
+        task: 'derive-xhs-cards',
+        maxTokens: 6144,
+        signal: AbortSignal.timeout(XHS_STAGE2_CARD_TIMEOUT_MS),
+      })
+      const parsedMap = parseXhsBatchCardsMarkup(raw, [idx])
+      hit = parsedMap.get(idx) ?? parseSingleCardModelOutput(raw)
+    } catch (err) {
+      rateLimited = isRateLimitError(err)
+      hit = null
+    }
+
+    if (hit?.html) {
+      commitCard(idx, hit)
+      return
+    }
+
+    // 限流时短退避后再进入单页兜底重试，避免并发风暴
+    if (rateLimited) {
+      await new Promise(resolve => setTimeout(resolve, 350 + Math.floor(Math.random() * 250)))
     }
 
     try {
-      const raw = await callModel(ctx, {
-        system: batchPrompt.system,
-        user: batchPrompt.user,
-        images: batchPrompt.images,
-        onImageFallback,
-        task: 'derive-xhs-cards',
-        maxTokens: 6144,
-        signal: AbortSignal.timeout(120_000),
-        onText: delta => {
-          streamBuf += delta
-          if (!/<\/xhs[-_]card>/i.test(streamBuf)) return
-          const partialMap = parseXhsBatchCardsMarkup(streamBuf, batch)
-          for (const [idx, hit] of partialMap.entries()) {
-            emitCard(idx, hit)
-          }
-        },
+      const cardReferenceImages = selectXhsReferenceImages(refImages, deck.referencePlan, idx)
+      const singlePrompt = buildSingleCardRedesignPrompt({
+        article,
+        blocks: prepared.blocks,
+        images: prepared.images,
+        deck: { ...deck, cards: nextCards },
+        cardIndex: idx,
+        cardPrompt: prepared.designPrompt || '',
+        referenceImages: cardReferenceImages,
+        reason: '该页精绘未返回完整 HTML，请单独精绘本页。',
+        skill: prepared.skill,
       })
-      parsedMap = parseXhsBatchCardsMarkup(raw, batch)
-      for (const [idx, hit] of parsedMap.entries()) {
-        emitCard(idx, hit)
-      }
-      await writeChain
-    } catch {
-      await writeChain
-      parsedMap = new Map()
-    }
-
-    for (const idx of batch) {
-      if (streamedDone.has(idx)) continue
-      const hit = parsedMap.get(idx)
-      if (hit?.html) {
-        emitCard(idx, hit)
-        await writeChain
+      const retried = await runSingleCardModelCall(ctx, singlePrompt, {
+        maxTokens: 6144,
+        images: cardReferenceImages,
+        onImageFallback,
+        visionSupport,
+        attachmentCache,
+      })
+      if (retried?.html) {
+        commitCard(idx, retried)
       } else {
-        try {
-          const cardReferenceImages = selectXhsReferenceImages(refImages, deck.referencePlan, idx)
-          const singlePrompt = buildSingleCardRedesignPrompt({
-            article,
-            blocks: prepared.blocks,
-            images: prepared.images,
-            deck: { ...deck, cards: nextCards },
-            cardIndex: idx,
-            cardPrompt: prepared.designPrompt || '',
-            referenceImages: cardReferenceImages,
-            reason: '批量精绘未返回该页 HTML，请单独精绘本页。',
-            skill: prepared.skill,
-          })
-          const retried = await runSingleCardModelCall(ctx, singlePrompt, {
-            maxTokens: 6144,
-            images: cardReferenceImages,
-            onImageFallback,
-          })
-          if (retried?.html) {
-            emitCard(idx, retried)
-            await writeChain
-          } else if (onCardReady) {
-            // 兜底保留结构化蓝图，也标记该页完成以便画布立即展示
-            await onCardReady(idx, nextCards[idx], nextCards.map(c => ({ ...c })))
-          }
-        } catch {
-          if (onCardReady) {
-            await onCardReady(idx, nextCards[idx], nextCards.map(c => ({ ...c }))).catch(() => {})
-          }
-        }
+        inFlightSet.delete(idx)
+        scheduleCardReady(idx)
       }
+    } catch {
+      inFlightSet.delete(idx)
+      scheduleCardReady(idx)
     }
-  }
+  })
 
-  // 阶段 3：整套内页代码级拓扑去重（维护全部内页拓扑 Set，检测相邻与跨页同构，修复后重新校验整套）
+  await writeChain
+
+  // 阶段 3：整套内页代码级拓扑去重（单轮找出全部同构页并行修复，分配差异化建议版式，修复后复检整套）
   const MAX_DEDUP_REPAIRS = 4
   let dedupRepairs = 0
-  const findFirstInnerDuplicate = cardsList => {
+  const findAllInnerDuplicates = cardsList => {
     const seen = new Map()
+    const duplicates = []
     for (let i = 1; i < cardsList.length; i++) {
       const card = cardsList[i]
       if (card.kind === 'end' || !card.html) continue
       const sig = computeDomTopologySignature(card.html)
       if (!sig) continue
       if (seen.has(sig)) {
-        return { index: i, conflictPage: seen.get(sig), sig }
+        duplicates.push({ index: i, conflictPage: seen.get(sig), sig })
+      } else {
+        seen.set(sig, i + 1)
       }
-      seen.set(sig, i + 1)
     }
-    return null
+    return duplicates
   }
 
   while (dedupRepairs < MAX_DEDUP_REPAIRS) {
-    const dup = findFirstInnerDuplicate(nextCards)
-    if (!dup) break
-    dedupRepairs++
-    onStage?.('deduping', `正在优化第 ${dup.index + 1} 页版式，确保与第 ${dup.conflictPage} 页不重样…`, dup.index)
-    const card = nextCards[dup.index]
-    try {
-      const hardcoded = findHardcodedBrandColors(`${card.html}\n${card.pageCss || ''}`)
-      const reason = [
-        `第 ${dup.index + 1} 页与第 ${dup.conflictPage} 页的 DOM 排版拓扑完全重复，且整套卡片内页版式绝不能重样。请彻底更换一种与已有各页都不同的视觉构图（如改用对照表、双栏 Bento、时间轴、指标看板、大号引言卡或规格清单）。`,
-        hardcoded.length ? `同时移除硬编码品牌色（${hardcoded.slice(0, 3).join('、')}），改用 var(--xhs-*) 变量。` : '',
-      ].filter(Boolean).join(' ')
-      const cardReferenceImages = selectXhsReferenceImages(refImages, deck.referencePlan, dup.index)
-      const repairPrompt = buildSingleCardRedesignPrompt({
-        article,
-        blocks: prepared.blocks,
-        images: prepared.images,
-        deck: { ...deck, cards: nextCards },
-        cardIndex: dup.index,
-        cardPrompt: prepared.designPrompt || '',
-        referenceImages: cardReferenceImages,
-        reason,
-        skill: prepared.skill,
-      })
-      const repaired = await runSingleCardModelCall(ctx, repairPrompt, {
-        maxTokens: 6144,
-        images: cardReferenceImages,
-        onImageFallback,
-      })
-      if (!repaired?.html) break
-      const repairedSig = computeDomTopologySignature(repaired.html)
-      nextCards[dup.index] = {
-        ...nextCards[dup.index],
-        html: repaired.html,
-        ...(repaired.pageCss ? { pageCss: repaired.pageCss } : {}),
-        ...(repaired.layoutArchetype ? { layoutArchetype: repaired.layoutArchetype } : {}),
+    const allDups = findAllInnerDuplicates(nextCards)
+    if (!allDups.length) break
+    const wave = allDups.slice(0, MAX_DEDUP_REPAIRS - dedupRepairs)
+    dedupRepairs += wave.length
+    const pageListText = wave.map(d => `第 ${d.index + 1} 页`).join('、')
+    onStage?.(
+      'deduping',
+      wave.length === 1
+        ? `正在优化第 ${wave[0].index + 1} 页版式，确保与第 ${wave[0].conflictPage} 页不重样…`
+        : `正在并行优化 ${pageListText} 版式，确保整套内页不重样…`,
+      wave[0].index,
+    )
+
+    let anyRepaired = false
+    await runWithConcurrency(wave, Math.min(resolvedConcurrency, wave.length), async (dup, wavePos = 0) => {
+      const card = nextCards[dup.index]
+      const suggested = DEDUP_SUGGESTED_ARCHETYPES[(dup.index + wavePos) % DEDUP_SUGGESTED_ARCHETYPES.length]
+      try {
+        const hardcoded = findHardcodedBrandColors(`${card.html}\n${card.pageCss || ''}`)
+        const reason = [
+          `第 ${dup.index + 1} 页与第 ${dup.conflictPage} 页的 DOM 排版拓扑完全重复，且整套卡片内页版式绝不能重样。请彻底更换一种与已有各页都不同的视觉构图（优先改用：${suggested}）。`,
+          hardcoded.length ? `同时移除硬编码品牌色（${hardcoded.slice(0, 3).join('、')}），改用 var(--xhs-*) 变量。` : '',
+        ].filter(Boolean).join(' ')
+        const cardReferenceImages = selectXhsReferenceImages(refImages, deck.referencePlan, dup.index)
+        const repairPrompt = buildSingleCardRedesignPrompt({
+          article,
+          blocks: prepared.blocks,
+          images: prepared.images,
+          deck: { ...deck, cards: nextCards },
+          cardIndex: dup.index,
+          cardPrompt: prepared.designPrompt || '',
+          referenceImages: cardReferenceImages,
+          reason,
+          skill: prepared.skill,
+        })
+        const repaired = await runSingleCardModelCall(ctx, repairPrompt, {
+          maxTokens: 6144,
+          images: cardReferenceImages,
+          onImageFallback,
+          visionSupport,
+          attachmentCache,
+        })
+        if (!repaired?.html) return
+        anyRepaired = true
+        nextCards[dup.index] = {
+          ...nextCards[dup.index],
+          html: repaired.html,
+          ...(repaired.pageCss ? { pageCss: repaired.pageCss } : {}),
+          ...(repaired.layoutArchetype ? { layoutArchetype: repaired.layoutArchetype } : {}),
+        }
+        scheduleCardReady(dup.index)
+      } catch {
+        // 单页修复失败不影响其他页
       }
-      if (onCardReady) {
-        await onCardReady(dup.index, nextCards[dup.index], nextCards.map(c => ({ ...c }))).catch(() => {})
-      }
-      if (repairedSig === dup.sig) {
-        continue
-      }
-    } catch {
-      break
-    }
+    })
+    await writeChain
+    if (!anyRepaired) break
   }
 
   return nextCards
@@ -746,6 +865,7 @@ export async function generateDerivative(ctx, store, {
   designPrompt = '',
   referenceImages = [],
   stagedHtml,
+  concurrency,
   confirmOverwrite = false,
   progressive = false,
   onProgress = null,
@@ -770,6 +890,14 @@ export async function generateDerivative(ctx, store, {
     id: `ref-${index + 1}`,
     dataUrl,
   }))
+  // 整套生成期间复用一次视觉能力探测与参考图附件上传结果，避免并发阶段重复查询与上传
+  const attachmentCache = new Map()
+  const [xhsModelLimit, resolvedVisionSupport] = platform === 'xhs'
+    ? await Promise.all([
+      configuredModelMaxTokens(ctx),
+      stage1ReferenceImages.length ? modelVisionSupport(ctx) : Promise.resolve(undefined),
+    ])
+    : [null, undefined]
   let visionFallbackNote = ''
   let referencePlanFallbackNote = ''
   const onImageFallback = reason => {
@@ -802,7 +930,6 @@ export async function generateDerivative(ctx, store, {
   let firstParsed = null
   let stage1UsedMarkup = false
   let stage1HasBlueprint = false
-  const xhsModelLimit = platform === 'xhs' ? await configuredModelMaxTokens(ctx) : null
   const initialMaxTokens = platform === 'xhs' ? Math.min(XHS_BLUEPRINT_MAX_TOKENS, xhsModelLimit ?? Infinity) : 8192
   for (let attempt = 0; attempt < 2; attempt++) {
     const retryAfterTruncation = lastError?.code === 'XHS_BLUEPRINT_MAX_TOKENS'
@@ -832,6 +959,8 @@ export async function generateDerivative(ctx, store, {
       user: userMessage,
       images: platform === 'xhs' ? stage1ReferenceImages : [],
       onImageFallback,
+      visionSupport: resolvedVisionSupport,
+      attachmentCache,
       task: `derive-${platform}`,
       maxTokens,
       onFinish: kind => { finishKind = kind },
@@ -927,6 +1056,19 @@ export async function generateDerivative(ctx, store, {
     }
 
     if (shouldRunStage2 || alreadyHasCustomHtml) {
+      const formatParallelMessage = (doneCount, totalCards, activeIndices) => {
+        if (!activeIndices.length) {
+          return doneCount >= totalCards
+            ? `全部 ${totalCards} 页精绘完成，正在做版式防重检…`
+            : `已完成策划，正在并行精绘（共 ${totalCards} 页）…`
+        }
+        const pages = activeIndices.map(i => i + 1).join('、')
+        return doneCount === 0
+          ? `已完成策划，正在 ${activeIndices.length} 路并行精绘第 ${pages} 页…`
+          : `已精绘 ${doneCount} / ${totalCards} 页，正在并行精绘第 ${pages} 页…`
+      }
+      let currentActiveIndices = []
+
       if (progressive && shouldRunStage2) {
         // 阶段 1 落盘：画布立刻出现整套卡片骨架与笔记文案，随后每精绘完一张就立即刷上画布！
         const skeletonNorm = normalizeXhs(withPrompt, {
@@ -937,12 +1079,18 @@ export async function generateDerivative(ctx, store, {
         })
         await persistSnapshot(skeletonNorm)
         const totalCards = skeletonNorm.cards.length
+        const initialLimit = Math.max(1, Math.min(8, Number(concurrency) || XHS_STAGE2_CONCURRENCY))
+        currentActiveIndices = skeletonNorm.cards
+          .map((c, idx) => (c.html ? -1 : idx))
+          .filter(idx => idx >= 0)
+          .slice(0, initialLimit)
         onProgress?.({
           stage: 'designing',
           totalCards,
           completedCards: [...completedSet],
-          activeCardIndex: 0,
-          message: `已完成策划，正在精绘第 1 / ${totalCards} 页…`,
+          activeCardIndex: currentActiveIndices[0] ?? 0,
+          activeCardIndices: currentActiveIndices,
+          message: formatParallelMessage(completedSet.size, totalCards, currentActiveIndices),
         })
       }
 
@@ -951,17 +1099,35 @@ export async function generateDerivative(ctx, store, {
         prepared,
         deck: withPrompt,
         onImageFallback,
+        visionSupport: resolvedVisionSupport,
+        attachmentCache,
+        concurrency,
+        onActiveChange: progressive
+          ? activeIndices => {
+            currentActiveIndices = activeIndices
+            const totalCards = withPrompt.cards.length
+            onProgress?.({
+              stage: 'designing',
+              totalCards,
+              completedCards: [...completedSet].sort((a, b) => a - b),
+              activeCardIndex: activeIndices[0] ?? 0,
+              activeCardIndices: activeIndices,
+              message: formatParallelMessage(completedSet.size, totalCards, activeIndices),
+            })
+          }
+          : null,
         onStage: (stage, message, activeCardIndex) => {
           onProgress?.({
             stage,
             totalCards: withPrompt.cards.length,
             completedCards: [...completedSet].sort((a, b) => a - b),
             activeCardIndex,
+            activeCardIndices: Number.isInteger(activeCardIndex) ? [activeCardIndex] : [],
             message,
           })
         },
         onCardReady: progressive
-          ? async (idx, _card, allCardsSnapshot) => {
+          ? async (idx, _card, allCardsSnapshot, activeSnapshot = currentActiveIndices) => {
             completedSet.add(idx)
             const partialNorm = normalizeXhs(
               { ...withPrompt, cards: allCardsSnapshot },
@@ -974,15 +1140,15 @@ export async function generateDerivative(ctx, store, {
             )
             await persistSnapshot(partialNorm)
             const totalCards = allCardsSnapshot.length
-            const nextPending = allCardsSnapshot.findIndex((_, i) => !completedSet.has(i))
+            const activeIndices = activeSnapshot.filter(i => !completedSet.has(i))
+            const nextPending = activeIndices[0] ?? allCardsSnapshot.findIndex((_, i) => !completedSet.has(i))
             onProgress?.({
               stage: 'designing',
               totalCards,
               completedCards: [...completedSet].sort((a, b) => a - b),
               activeCardIndex: nextPending >= 0 ? nextPending : idx,
-              message: nextPending >= 0
-                ? `已精绘 ${completedSet.size} / ${totalCards} 页，正在设计第 ${nextPending + 1} 页…`
-                : `全部 ${totalCards} 页精绘完成，正在做版式防重检…`,
+              activeCardIndices: activeIndices,
+              message: formatParallelMessage(completedSet.size, totalCards, activeIndices),
             })
           }
           : null,

@@ -439,30 +439,34 @@ body { display: none; }
 
   // 故意让第 2 页和第 3 页返回完全相同的 DOM 拓扑，验证阶段 3 会自动定向重设计第 3 页
   const dupTopologyHtml = '<section><header><h2>同构标题</h2></header><ul><li>第一项</li><li>第二项</li></ul></section>'
-  const batch1Markup = `
-<xhs-page-style page="1">.hero-band { border-bottom: 2px solid var(--xhs-accent); }</xhs-page-style>
-<xhs-card page="1"><div class="hero-band"><h1>增长 1200 人复盘</h1><p>先做最小版本</p></div></xhs-card>
-<xhs-card page="2">${dupTopologyHtml}</xhs-card>
-<xhs-card page="3">${dupTopologyHtml}</xhs-card>
-`
-  // 第 2 批故意只返回第 4 页，缺失第 5 页；随后的单页重试也返回空 -> 第 5 页回退保留空 html 不丢弃整套
-  const batch2Markup = `
-<xhs-card page="4"><article><h2>四个核心亮点</h2><div class="grid"><div>亮点一</div><div>亮点二</div></div></article></xhs-card>
-`
+  const cardRepliesByPage = {
+    1: `<xhs-page-style page="1">.hero-band { border-bottom: 2px solid var(--xhs-accent); }</xhs-page-style>
+<xhs-card page="1"><div class="hero-band"><h1>增长 1200 人复盘</h1><p>先做最小版本</p></div></xhs-card>`,
+    2: `<xhs-card page="2">${dupTopologyHtml}</xhs-card>`,
+    3: `<xhs-card page="3">${dupTopologyHtml}</xhs-card>`,
+    4: '<xhs-card page="4"><article><h2>四个核心亮点</h2><div class="grid"><div>亮点一</div><div>亮点二</div></div></article></xhs-card>',
+    // 第 5 页在主调用与两次单页重试中均返回无效内容 -> 回退保留空 html 不丢弃整套
+    5: '无效返回',
+  }
   // 阶段 3 定向修复第 3 页，换一种截然不同的表格拓扑
   const dedupRepairMarkup = `
 <xhs-page-style page="3">.step-table { border-color: var(--xhs-line); }</xhs-page-style>
 <xhs-card page="3"><div class="step-table"><h2>三步跑通流程</h2><table><tbody><tr><td>01</td><td>先做最小版本</td></tr></tbody></table></div></xhs-card>
 `
 
-  const fake = makeFakeCtx([
-    stage1Markup,
-    batch1Markup,
-    batch2Markup,
-    '无效返回1',
-    '无效返回2',
-    dedupRepairMarkup,
-  ])
+  const fake = makeFakeCtx(request => {
+    const task = request.messages[0].source?.task
+    if (task === 'derive-xhs') return stage1Markup
+    const user = JSON.parse(request.messages[0].content[0].text)
+    if (task === 'derive-xhs-cards') {
+      return cardRepliesByPage[user.targetCards[0].page]
+    }
+    if (task === 'derive-xhs-card') {
+      if (user.page === 3) return dedupRepairMarkup
+      return '无效返回'
+    }
+    return ''
+  })
 
   const record = await generateDerivative(fake.ctx, store, {
     id: article.id,
@@ -477,17 +481,31 @@ body { display: none; }
     .filter(part => part.type === 'text' && /^\[参考图 ref-/.test(part.text))
     .map(part => /^\[参考图 (ref-\d+)\]$/.exec(part.text)[1])
   assert.deepEqual(imageIdsFrom(fake.calls[0]), ['ref-1', 'ref-2', 'ref-3', 'ref-4', 'ref-5'])
-  assert.deepEqual(imageIdsFrom(fake.calls[1]), ['ref-5', 'ref-1', 'ref-2', 'ref-3'])
-  assert.deepEqual(imageIdsFrom(fake.calls[2]), ['ref-5', 'ref-4'])
-  const batch1User = JSON.parse(fake.calls[1].messages[0].content[0].text)
-  assert.deepEqual(batch1User.targetCards[0].referenceImageIds, ['ref-5', 'ref-1'])
-  assert.deepEqual(batch1User.targetCards[1].referenceImageIds, ['ref-5', 'ref-2'])
-  assert.deepEqual(batch1User.targetCards[2].referenceImageIds, ['ref-5', 'ref-3', 'ref-2'], 'ref-2 可跨页复用')
-  const batch2User = JSON.parse(fake.calls[2].messages[0].content[0].text)
-  assert.deepEqual(batch2User.targetCards[1].referenceImageIds, ['ref-5'], '未分配页只携带共享风格图')
-  assert.deepEqual(imageIdsFrom(fake.calls[3]), ['ref-5'], '单页失败重试不广播全部图片')
-  assert.deepEqual(imageIdsFrom(fake.calls[4]), ['ref-5'])
-  assert.deepEqual(imageIdsFrom(fake.calls[5]), ['ref-5', 'ref-3', 'ref-2'], '拓扑去重只携带目标页图片')
+
+  const stage2Calls = fake.calls.filter(c => c.messages[0].source?.task === 'derive-xhs-cards')
+  assert.equal(stage2Calls.length, 5, '5 页卡片应拆分为 5 次单页并行精绘')
+  const stage2ByPage = new Map(stage2Calls.map(call => {
+    const user = JSON.parse(call.messages[0].content[0].text)
+    return [user.targetCards[0].page, { call, user }]
+  }))
+  assert.deepEqual(imageIdsFrom(stage2ByPage.get(1).call), ['ref-5', 'ref-1'])
+  assert.deepEqual(imageIdsFrom(stage2ByPage.get(2).call), ['ref-5', 'ref-2'])
+  assert.deepEqual(imageIdsFrom(stage2ByPage.get(3).call), ['ref-5', 'ref-3', 'ref-2'], 'ref-2 可跨页复用')
+  assert.deepEqual(imageIdsFrom(stage2ByPage.get(4).call), ['ref-5', 'ref-4'])
+  assert.deepEqual(imageIdsFrom(stage2ByPage.get(5).call), ['ref-5'], '未分配页只携带共享风格图')
+  assert.deepEqual(stage2ByPage.get(1).user.targetCards[0].referenceImageIds, ['ref-5', 'ref-1'])
+  assert.deepEqual(stage2ByPage.get(2).user.targetCards[0].referenceImageIds, ['ref-5', 'ref-2'])
+  assert.deepEqual(stage2ByPage.get(3).user.targetCards[0].referenceImageIds, ['ref-5', 'ref-3', 'ref-2'])
+  assert.deepEqual(stage2ByPage.get(5).user.targetCards[0].referenceImageIds, ['ref-5'])
+
+  const retryCallsPage5 = fake.calls.filter(c => c.messages[0].source?.task === 'derive-xhs-card' && JSON.parse(c.messages[0].content[0].text).page === 5)
+  assert.equal(retryCallsPage5.length, 2, '第 5 页主调用失败后应触发 2 次单页兜底重试')
+  for (const call of retryCallsPage5) {
+    assert.deepEqual(imageIdsFrom(call), ['ref-5'], '单页失败重试不广播全部图片')
+  }
+  const dedupCallPage3 = fake.calls.find(c => c.messages[0].source?.task === 'derive-xhs-card' && JSON.parse(c.messages[0].content[0].text).page === 3)
+  assert.ok(dedupCallPage3)
+  assert.deepEqual(imageIdsFrom(dedupCallPage3), ['ref-5', 'ref-3', 'ref-2'], '拓扑去重只携带目标页图片')
 
   // 验证 designPrompt 注入到 Stage 1 请求并保存
   assert.match(fake.calls[0].system, /杂志画报风/)
@@ -521,20 +539,24 @@ test('无参考图计划时后续调用不带图片、按内容自由设计并�
       { kind: 'end', layoutArchetype: 'end', heading: '收尾', lines: ['先收藏'], source: [] },
     ],
   }
-  const batch1 = `
-<xhs-card page="1"><div class="p1"><h1>封面</h1><p>最小版本</p></div></xhs-card>
-<xhs-card page="2"><section><table><tbody><tr><td>以前</td><td>现在</td></tr></tbody></table></section></xhs-card>
-<xhs-card page="3"><article><ol><li>一步</li><li>二步</li><li>三步</li></ol></article></xhs-card>`
-  const batch2 = `
-<xhs-card page="4"><div class="p4"><h2>矩阵</h2><div><span>模块一</span><span>模块二</span></div></div></xhs-card>
-<xhs-card page="5"><footer class="p5"><h2>收尾</h2><p>先收藏</p></footer></xhs-card>`
-  const fake = makeFakeCtx([stage1, batch1, batch2])
+  const cardMarkupByPage = {
+    1: '<xhs-card page="1"><div class="p1"><h1>封面</h1><p>最小版本</p></div></xhs-card>',
+    2: '<xhs-card page="2"><section><table><tbody><tr><td>以前</td><td>现在</td></tr></tbody></table></section></xhs-card>',
+    3: '<xhs-card page="3"><article><ol><li>一步</li><li>二步</li><li>三步</li></ol></article></xhs-card>',
+    4: '<xhs-card page="4"><div class="p4"><h2>矩阵</h2><div><span>模块一</span><span>模块二</span></div></div></xhs-card>',
+    5: '<xhs-card page="5"><footer class="p5"><h2>收尾</h2><p>先收藏</p></footer></xhs-card>',
+  }
+  const fake = makeFakeCtx(request => {
+    if (request.messages[0].source?.task === 'derive-xhs') return JSON.stringify(stage1)
+    const user = JSON.parse(request.messages[0].content[0].text)
+    return cardMarkupByPage[user.targetCards[0].page]
+  })
   const record = await generateDerivative(fake.ctx, store, {
     id: article.id,
     platform: 'xhs',
     referenceImages: ['data:image/png;base64,AA==', 'data:image/png;base64,BB=='],
   })
-  assert.equal(fake.calls.length, 3)
+  assert.equal(fake.calls.length, 6)
   assert.ok(fake.calls[0].messages[0].content.some(part => part.type === 'image'))
   for (const call of fake.calls.slice(1)) {
     assert.equal(call.messages[0].content.some(part => part.type === 'image'), false)
@@ -750,36 +772,36 @@ test('阶段 3 整套拓扑去重：检出跨页同构（第 2 页与第 4 页�
   const topoB = '<article><h2>流程步骤</h2><ol><li>步骤1</li><li>步骤2</li><li>步骤3</li></ol></article>'
   const topoC = '<div class="metrics-wrap"><h2>四宫格矩阵</h2><table><tbody><tr><td>亮点一</td><td>结构稳定</td></tr></tbody></table></div>'
 
-  const batch1 = `
-<xhs-card page="1"><div class="hero"><h1>增长 1200 人复盘</h1><p>先做最小版本</p></div></xhs-card>
-<xhs-card page="2">${topoA}</xhs-card>
-<xhs-card page="3">${topoB}</xhs-card>
-`
-  const batch2 = `
-<xhs-card page="4">${topoA}</xhs-card>
-<xhs-card page="5"><div class="finale"><h2>点个收藏</h2><p>欢迎评论区交流</p></div></xhs-card>
-`
+  const pageHtml = {
+    1: '<xhs-card page="1"><div class="hero"><h1>增长 1200 人复盘</h1><p>先做最小版本</p></div></xhs-card>',
+    2: `<xhs-card page="2">${topoA}</xhs-card>`,
+    3: `<xhs-card page="3">${topoB}</xhs-card>`,
+    4: `<xhs-card page="4">${topoA}</xhs-card>`,
+    5: '<xhs-card page="5"><div class="finale"><h2>点个收藏</h2><p>欢迎评论区交流</p></div></xhs-card>',
+  }
   // 第一次修复第 4 页时，故意返回与第 3 页同构的 topoB -> 复检应发现与第 3 页冲突，再次触发定向重设计，第二次返回全新的 topoC
-  const repairCollisionWithPage3 = `<xhs-card page="4">${topoB}</xhs-card>`
-  const repairUnique = `<xhs-card page="4">${topoC}</xhs-card>`
-
-  const fake = makeFakeCtx([
-    stage1Markup,
-    batch1,
-    batch2,
-    repairCollisionWithPage3,
-    repairUnique,
-  ])
+  const repairReplies = [`<xhs-card page="4">${topoB}</xhs-card>`, `<xhs-card page="4">${topoC}</xhs-card>`]
+  const fake = makeFakeCtx(request => {
+    const task = request.messages[0].source?.task
+    if (task === 'derive-xhs') return stage1Markup
+    if (task === 'derive-xhs-cards') {
+      const user = JSON.parse(request.messages[0].content[0].text)
+      return pageHtml[user.targetCards[0].page]
+    }
+    return repairReplies.shift() ?? ''
+  })
 
   const record = await generateDerivative(fake.ctx, store, {
     id: article.id,
     platform: 'xhs',
   })
 
-  // 阶段 1 (1) + 阶段 2 两批 (2) + 阶段 3 两次去重修复 (2) = 5 次调用
-  assert.equal(fake.calls.length, 5)
-  assert.match(fake.calls[3].system, /第 4 页与第 2 页/)
-  assert.match(fake.calls[4].system, /第 4 页与第 3 页/)
+  // 阶段 1 (1) + 阶段 2 五页并行 (5) + 阶段 3 两次去重修复 (2) = 8 次调用
+  assert.equal(fake.calls.length, 8)
+  const dedupCalls = fake.calls.filter(c => c.messages[0].source?.task === 'derive-xhs-card')
+  assert.equal(dedupCalls.length, 2)
+  assert.match(dedupCalls[0].system, /第 4 页与第 2 页/)
+  assert.match(dedupCalls[1].system, /第 4 页与第 3 页/)
 
   const sig2 = computeDomTopologySignature(record.payload.cards[1].html)
   const sig3 = computeDomTopologySignature(record.payload.cards[2].html)
@@ -821,26 +843,26 @@ test('extractJson 遇到 <xhs-meta> 后紧跟 <xhs-style> 时不被 CSS 花括�
 }
 </xhs-meta>`
 
-  // 用分片流模拟批内逐张吐出 <xhs-card>
-  const batch1Chunks = [
-    '<xhs-card page="1"><div class="p1"><h1>封面</h1></div></xhs-card>\n',
-    '<xhs-card page="2"><section><table><tbody><tr><td>对比</td></tr></tbody></table></section></xhs-card>\n',
-    '<xhs-card page="3"><article><ol><li>步骤1</li></ol></article></xhs-card>',
-  ]
-  const batch2Chunks = [
-    '<xhs-card page="4"><div class="grid"><div>模块一</div><div>模块二</div></div></xhs-card>\n',
-    '<xhs-card page="5"><div class="end"><h2>收尾</h2></div></xhs-card>',
-  ]
-  const scriptedStreams = [[stage1], batch1Chunks, batch2Chunks]
-  let callIdx = 0
+  // 每页独立并发精绘：每完成一张立即回调落盘
+  const pageMarkup = {
+    1: '<xhs-card page="1"><div class="p1"><h1>封面</h1></div></xhs-card>',
+    2: '<xhs-card page="2"><section><table><tbody><tr><td>对比</td></tr></tbody></table></section></xhs-card>',
+    3: '<xhs-card page="3"><article><ol><li>步骤1</li></ol></article></xhs-card>',
+    4: '<xhs-card page="4"><div class="grid"><div>模块一</div><div>模块二</div></div></xhs-card>',
+    5: '<xhs-card page="5"><div class="end"><h2>收尾</h2></div></xhs-card>',
+  }
   const llm = {
     prepareCall() {
       return {
         config: {},
-        async *stream() {
-          const chunks = scriptedStreams[callIdx++] || []
-          for (const c of chunks) {
-            yield { type: 'text-delta', text: c }
+        async *stream({ messages }) {
+          const task = messages[0].source?.task
+          if (task === 'derive-xhs') {
+            yield { type: 'text-delta', text: stage1 }
+          } else {
+            const user = JSON.parse(messages[0].content[0].text)
+            const page = user.targetCards[0].page
+            yield { type: 'text-delta', text: pageMarkup[page] }
           }
           yield { type: 'finish', reason: { kind: 'stop' } }
         },
@@ -857,13 +879,19 @@ test('extractJson 遇到 <xhs-meta> 后紧跟 <xhs-style> 时不被 CSS 花括�
     onProgress: async progress => {
       const current = (await store.read()).articles.find(a => a.id === article.id)
       const htmlReadyCount = (current?.derivatives?.xhs?.payload?.cards || []).filter(c => Boolean(c.html)).length
-      snapshots.push({ stage: progress.stage, completed: progress.completedCards?.length ?? 0, htmlReadyCount })
+      snapshots.push({
+        stage: progress.stage,
+        completed: progress.completedCards?.length ?? 0,
+        activeCount: progress.activeCardIndices?.length ?? 0,
+        htmlReadyCount,
+      })
     },
   })
 
   // 应能观察到中间态（已完成 1、2、3、4、5 张逐步增长，而不是 0 直接跳到 5）
   const designingSteps = snapshots.filter(s => s.stage === 'designing').map(s => s.completed)
   assert.ok(designingSteps.includes(0), '阶段 1 完成后应立刻上报 0/5 骨架态')
+  assert.ok(snapshots.some(s => s.stage === 'designing' && s.activeCount === 5), '并发阶段应通过 activeCardIndices 上报所有并行精绘页')
   assert.ok(designingSteps.includes(1), '第 1 张闭合后应立刻上报 1/5')
   assert.ok(designingSteps.includes(2), '第 2 张闭合后应立刻上报 2/5')
   assert.ok(designingSteps.includes(5), '全部完成后应上报 5/5')
@@ -950,28 +978,37 @@ test('小红书整套生成与单页重设计支持上传参考图，且纯文�
   }
 }
 </xhs-meta>`
-  const batch1 = `
-<xhs-card page="1"><div class="p1"><h1>封面</h1></div></xhs-card>
-<xhs-card page="2"><section><table><tbody><tr><td>对比</td></tr></tbody></table></section></xhs-card>
-<xhs-card page="3"><article><ol><li>步骤1</li></ol></article></xhs-card>`
-  const batch2 = `
-<xhs-card page="4"><div class="grid"><div>模块一</div><div>模块二</div></div></xhs-card>
-<xhs-card page="5"><div class="end"><h2>收尾</h2></div></xhs-card>`
+  const pageReplies = {
+    1: '<xhs-card page="1"><div class="p1"><h1>封面</h1></div></xhs-card>',
+    2: '<xhs-card page="2"><section><table><tbody><tr><td>对比</td></tr></tbody></table></section></xhs-card>',
+    3: '<xhs-card page="3"><article><ol><li>步骤1</li></ol></article></xhs-card>',
+    4: '<xhs-card page="4"><div class="grid"><div>模块一</div><div>模块二</div></div></xhs-card>',
+    5: '<xhs-card page="5"><div class="end"><h2>收尾</h2></div></xhs-card>',
+  }
   const singleRedesign = '<xhs-card page="2"><section class="ref-card"><h2>模仿参考图后的第 2 页</h2></section></xhs-card>'
 
-  const makeModalCtx = (replies, inputModalities) => {
+  const makeModalCtx = (inputModalities) => {
     const captured = []
-    let i = 0
+    let listModelsCount = 0
     const llm = {
       async listModels() {
+        listModelsCount++
         return [{ id: 'm', name: 'M', inputModalities }]
       },
       prepareCall() {
         return {
           config: {},
           async *stream({ system, messages }) {
-            captured.push({ system, content: messages[0].content })
-            const text = replies[i++] ?? ''
+            captured.push({ system, content: messages[0].content, task: messages[0].source?.task })
+            const task = messages[0].source?.task
+            let text = ''
+            if (task === 'derive-xhs') text = stage1
+            else if (task === 'derive-xhs-cards') {
+              const user = JSON.parse(messages[0].content[0].text)
+              text = pageReplies[user.targetCards[0].page]
+            } else {
+              text = singleRedesign
+            }
             yield { type: 'text-delta', text }
             yield { type: 'finish', reason: { kind: 'stop' } }
           },
@@ -980,18 +1017,20 @@ test('小红书整套生成与单页重设计支持上传参考图，且纯文�
     }
     return {
       captured,
+      getListModelsCount: () => listModelsCount,
       ctx: { get: name => ({ llm, agentDefaultModel: { currentSelection: () => ({ provider: 'p', model: 'm' }) } }[name] ?? null) },
     }
   }
 
-  // 1) 支持识图的模型：整套生成 + 单页重设计都应带上 image 内容块
-  const vision = makeModalCtx([stage1, batch1, batch2, singleRedesign], ['text', 'image'])
+  // 1) 支持识图的模型：整套生成 + 单页重设计都应带上 image 内容块，且整套生成只探测 1 次 listModels
+  const vision = makeModalCtx(['text', 'image'])
   const rec = await generateDerivative(vision.ctx, store, {
     id: article.id,
     platform: 'xhs',
     referenceImages: [tinyPng, tinyPng],
   })
-  assert.equal(vision.captured.length, 3)
+  assert.equal(vision.captured.length, 6)
+  assert.equal(vision.getListModelsCount(), 1, '整套生成应复用一次视觉能力探测，避免并发重复调用 listModels')
   assert.ok(vision.captured.every(call => call.content.some(p => p.type === 'image' && p.mediaType === 'image/png')))
   assert.equal(vision.captured[0].content[1].text, '[参考图 ref-1]')
   assert.equal(vision.captured[0].content[3].text, '[参考图 ref-2]')
@@ -1014,13 +1053,13 @@ test('小红书整套生成与单页重设计支持上传参考图，且纯文�
     cardPrompt: '模仿参考图构图',
     referenceImages: [tinyPng, tinyPng],
   })
-  assert.equal(vision.captured.length, 4)
-  assert.equal(vision.captured[3].content.filter(part => part.type === 'image' && part.mediaType === 'image/png').length, 2)
-  assert.match(vision.captured[3].system, /视觉参考图/)
+  assert.equal(vision.captured.length, 7)
+  assert.equal(vision.captured[6].content.filter(part => part.type === 'image' && part.mediaType === 'image/png').length, 2)
+  assert.match(vision.captured[6].system, /视觉参考图/)
   assert.ok(redesigned.payload.cards[1].html.includes('ref-card'))
 
   // 2) 纯文本模型（inputModalities: ['text']）：自动去掉图片块，不报错，并在 warnings 中提示降级
-  const textOnly = makeModalCtx([stage1, batch1, batch2, singleRedesign], ['text'])
+  const textOnly = makeModalCtx(['text'])
   const fallbackRec = await generateDerivative(textOnly.ctx, store, {
     id: article.id,
     platform: 'xhs',
@@ -1095,4 +1134,138 @@ test('单页重设计遇到未闭合截断的 <xhs-card> 时自动重试，绝�
   assert.ok(!card2.html.includes('.p2-duel {'), '卡片 HTML 中绝不能混入 CSS 源码')
   assert.ok(card2.html.includes('同房间协作'), '应采用第 2 次完整重试后的 HTML')
   assert.ok(card2.pageCss.includes('.xhs-artboard .p2-duel'), '应正确提取单页 pageCss')
+})
+
+test('小红书性能优化：阶段 2 并发池提速、按页切片 blocks、稳定 system 前缀缓存、附件去重与阶段 3 并行去重', async () => {
+  const longArticle = [
+    '# 性能基准长文',
+    '## 第一章 缘起',
+    '第一段讲增长 1,200 人的关键转折点。' + '甲'.repeat(800),
+    '## 第二章 架构',
+    '第二段讲三步架构改造方案。' + '乙'.repeat(800),
+    '## 第三章 数据',
+    '第三段讲导出耗时缩短 80% 的实测结果。' + '丙'.repeat(800),
+    '## 第四章 复盘',
+    '第四段讲团队协作避坑清单。' + '丁'.repeat(800),
+  ].join('\n\n')
+  const { store, article } = setupStore(longArticle)
+  await store.update(state => { state.articles.push(article); state.currentId = article.id })
+  const [h1, b1, h2, b2, h3, b3, h4, b4] = article.blocks
+
+  const stage1 = `<xhs-meta>
+{
+  "deckStyle": "tech",
+  "tweaks": { "preset": "claude" },
+  "title": "并发加速测试",
+  "body": "${'这是一段符合一百字要求的测试小红书正文内容，重点记录我们在做并发渲染和上下文切片优化时的真实实测数据。'.repeat(2)}",
+  "tags": ["性能优化", "实操复盘", "工程实践"],
+  "cards": [
+    { "kind": "cover", "layoutArchetype": "hero", "heading": "并发提速实测", "lines": ["增长 1200 人"], "source": ["${b1.id}"] },
+    { "kind": "compare", "layoutArchetype": "cmp", "heading": "改造前后对比", "lines": ["以前 | 串行慢", "现在 | 并行快"], "source": ["${b2.id}"] },
+    { "kind": "steps", "layoutArchetype": "steps", "heading": "三步落地", "lines": ["一 | 拆页", "二 | 并发", "三 | 切片"], "source": ["${b2.id}"] },
+    { "kind": "metrics", "layoutArchetype": "kpi", "heading": "耗时缩短 80%", "lines": ["80% | 耗时下降 | 实测提升", "5x | 并发度 | 显著提速"], "source": ["${b3.id}"] },
+    { "kind": "grid", "layoutArchetype": "bento", "heading": "避坑清单", "lines": ["防限流 | 并发上限", "防重复 | 并行去重"], "source": ["${b4.id}"] },
+    { "kind": "end", "layoutArchetype": "end", "heading": "收藏备用", "lines": ["评论区交流"], "source": [] }
+  ],
+  "referencePlan": {
+    "images": [
+      { "id": "ref-1", "role": "style", "reason": "全局统一网格风格" }
+    ],
+    "sharedImageIds": ["ref-1"],
+    "pages": []
+  }
+}
+</xhs-meta>`
+
+  // 让第 3、4 页与第 2 页同构，验证阶段 3 并发修复两页
+  const dupHtml = '<section><header><h2>同构页</h2></header><ul><li>项一</li><li>项二</li></ul></section>'
+  const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
+  let activeStage2 = 0
+  let peakStage2 = 0
+  let activeDedup = 0
+  let peakDedup = 0
+  let saveImageCalls = 0
+  const stage2Systems = []
+  const stage2BlockCounts = new Map()
+
+  const attachments = {
+    async saveImage() {
+      saveImageCalls++
+      return { attachmentId: `att-${saveImageCalls}`, mediaType: 'image/png', bytes: 68 }
+    },
+  }
+  const llm = {
+    async listModels() {
+      return [{ id: 'm', inputModalities: ['text', 'image'] }]
+    },
+    prepareCall() {
+      return {
+        config: {},
+        async *stream({ system, messages }) {
+          const task = messages[0].source?.task
+          if (task === 'derive-xhs') {
+            yield { type: 'text-delta', text: stage1 }
+          } else if (task === 'derive-xhs-cards') {
+            activeStage2++
+            peakStage2 = Math.max(peakStage2, activeStage2)
+            stage2Systems.push(system)
+            const user = JSON.parse(messages[0].content[0].text)
+            const page = user.targetCards[0].page
+            stage2BlockCounts.set(page, user.blocks.map(b => b.id))
+            await new Promise(r => setTimeout(r, 35))
+            activeStage2--
+            const htmlMap = {
+              1: '<xhs-card page="1"><div class="hero"><h1>并发提速实测</h1></div></xhs-card>',
+              2: `<xhs-card page="2">${dupHtml}</xhs-card>`,
+              3: `<xhs-card page="3">${dupHtml}</xhs-card>`,
+              4: `<xhs-card page="4">${dupHtml}</xhs-card>`,
+              5: '<xhs-card page="5"><div class="bento"><h2>避坑清单</h2><blockquote>独立拓扑</blockquote></div></xhs-card>',
+              6: '<xhs-card page="6"><footer class="end"><h2>收藏备用</h2></footer></xhs-card>',
+            }
+            yield { type: 'text-delta', text: htmlMap[page] }
+          } else if (task === 'derive-xhs-card') {
+            activeDedup++
+            peakDedup = Math.max(peakDedup, activeDedup)
+            const user = JSON.parse(messages[0].content[0].text)
+            await new Promise(r => setTimeout(r, 35))
+            activeDedup--
+            const fixMap = {
+              3: '<xhs-card page="3"><article><h2>三步落地</h2><ol><li>一</li><li>二</li></ol></article></xhs-card>',
+              4: '<xhs-card page="4"><div class="kpi"><h2>耗时缩短 80%</h2><table><tbody><tr><td>80%</td></tr></tbody></table></div></xhs-card>',
+            }
+            yield { type: 'text-delta', text: fixMap[user.page] }
+          }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        },
+      }
+    },
+  }
+  const services = { llm, attachments, agentDefaultModel: { currentSelection: () => ({ provider: 'p', model: 'm' }) } }
+  const ctx = { get: name => services[name] ?? null }
+
+  const record = await generateDerivative(ctx, store, {
+    id: article.id,
+    platform: 'xhs',
+    concurrency: 4,
+    referenceImages: [tinyPng],
+  })
+
+  // 1. 阶段 2 真正并发执行且遵守并发上限 4
+  assert.equal(peakStage2, 4, `阶段 2 峰值并发应为 4（实际 ${peakStage2}）`)
+  // 2. 阶段 3 将第 3、4 两页同构冲突在一轮内并发修复
+  assert.equal(peakDedup, 2, `阶段 3 应并发修复 2 页冲突（实际峰值 ${peakDedup}）`)
+  // 3. 所有阶段 2 调用共享完全一致的 system prompt，最大化 KV Prefix Cache 命中
+  assert.equal(new Set(stage2Systems).size, 1, '同套卡片的阶段 2 调用应共享完全相同的 system prompt')
+  // 4. 按页切片 blocks：只带来源段落及紧邻标题，不重复发送整篇长文
+  assert.deepEqual(stage2BlockCounts.get(1), [h1.id, b1.id])
+  assert.deepEqual(stage2BlockCounts.get(2), [h2.id, b2.id])
+  assert.deepEqual(stage2BlockCounts.get(4), [h3.id, b3.id])
+  assert.deepEqual(stage2BlockCounts.get(5), [h4.id, b4.id])
+  assert.ok(stage2BlockCounts.get(6).length <= 1, 'end 尾页不应携带整篇母稿 blocks')
+  // 5. 共享参考图整套只上传一次附件
+  assert.equal(saveImageCalls, 1, `相同参考图应只上传 1 次附件（实际 ${saveImageCalls}）`)
+  // 6. 最终内页拓扑全部互不相同
+  const innerSigs = record.payload.cards.slice(1, 5).map(c => computeDomTopologySignature(c.html))
+  assert.equal(new Set(innerSigs).size, 4, '最终 4 个内页应全部拥有互不相同的 DOM 拓扑')
 })

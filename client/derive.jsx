@@ -1101,20 +1101,25 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
     setPacking(true)
     try {
       const base = safeFileBase(draft.title || article.title)
-      const files = []
-      for (let i = 0; i < cards.length; i++) {
-        const { blob, extension } = await renderCardDownload(cards[i], {
-          index: i,
-          total: cards.length,
-          palette,
-          author,
-          deckStyle,
-          tweaks,
-          customCss: draft?.customCss || '',
-        })
-        const data = new Uint8Array(await blob.arrayBuffer())
-        files.push({ name: `${base}-${String(i + 1).padStart(2, '0')}.${extension}`, data })
-      }
+      const files = new Array(cards.length)
+      const concurrency = Math.min(3, cards.length)
+      let cursor = 0
+      await Promise.all(Array.from({ length: concurrency }, async () => {
+        while (cursor < cards.length) {
+          const i = cursor++
+          const { blob, extension } = await renderCardDownload(cards[i], {
+            index: i,
+            total: cards.length,
+            palette,
+            author,
+            deckStyle,
+            tweaks,
+            customCss: draft?.customCss || '',
+          })
+          const data = new Uint8Array(await blob.arrayBuffer())
+          files[i] = { name: `${base}-${String(i + 1).padStart(2, '0')}.${extension}`, data }
+        }
+      }))
       const zipBytes = createZip(files)
       downloadBlob(new Blob([zipBytes], { type: 'application/zip' }), `${base}-小红书卡片.zip`)
       toast(`已打包 ${files.length} 张卡片`)
@@ -1144,6 +1149,11 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
     && xhsJob.stage === 'designing'
     && !card?.html
     && !(xhsJob.completedCards || []).includes(index),
+  )
+  const isCardActiveAt = index => (
+    Array.isArray(xhsJob?.activeCardIndices)
+      ? xhsJob.activeCardIndices.includes(index)
+      : xhsJob?.activeCardIndex === index
   )
   const lightboxCard = activeLightbox !== null ? cards[activeLightbox] : null
   const lightboxPending = activeLightbox !== null && lightboxCard ? isCardPendingAt(activeLightbox, lightboxCard) : false
@@ -1822,7 +1832,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                     const isSelected = index === safeSelected
                     const isCardRedesigning = pending === `derive/xhs/card/${index}`
                     const isCardPending = isCardPendingAt(index, card)
-                    const isCardActive = isCardPending && xhsJob?.activeCardIndex === index
+                    const isCardActive = isCardPending && isCardActiveAt(index)
                     const pageNo = String(index + 1).padStart(2, '0')
                     const cardHtml = isCardPending
                       ? ''
@@ -3278,7 +3288,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
               <div key={activeLightbox} className={lightboxSlideClass}>
               {lightboxPending ? (
                 <div
-                  className={`ws-cd-skeleton-card ${xhsJob?.activeCardIndex === activeLightbox ? 'is-active' : ''}`}
+                  className={`ws-cd-skeleton-card ${isCardActiveAt(activeLightbox) ? 'is-active' : ''}`}
                   style={{ width: `${Math.round(1080 * 0.44)}px`, height: `${Math.round(1440 * 0.44)}px` }}
                   aria-label={`第 ${activeLightbox + 1} 页正在精绘`}
                 >
@@ -3287,7 +3297,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                   <div className="ws-cd-skel-line is-short" />
                   <div className="ws-cd-skel-block" />
                   <div className="ws-cd-skel-status" style={{ fontSize: '14px' }}>
-                    {xhsJob?.activeCardIndex === activeLightbox
+                    {isCardActiveAt(activeLightbox)
                       ? `✨ 正在精绘第 ${activeLightbox + 1} 页，完成后自动展示…`
                       : `排队等待精绘（第 ${activeLightbox + 1} 页），完成后自动展示…`}
                   </div>

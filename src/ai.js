@@ -158,9 +158,10 @@ function isImageUnsupportedError(err) {
   return /unsupported_content|does_not_support_images|does not support image|inputmodalit|image.*not.*support|vision.*not.*support|multimodal.*not.*support|unknown content type.*image|不支持.*图|不支持识图|不支持视觉/i.test(msg)
 }
 
-async function buildUserContent(ctx, user, images) {
+async function buildUserContent(ctx, user, images, attachmentCache = null) {
   const parts = [{ type: 'text', text: user }]
   const attachments = ctx.get('attachments')
+  const validEntries = []
   for (const image of Array.isArray(images) ? images : []) {
     const dataUrl = typeof image === 'string' ? image : image?.dataUrl
     const id = typeof image?.id === 'string' && /^ref-(?:[1-9]|10)$/.test(image.id)
@@ -168,21 +169,42 @@ async function buildUserContent(ctx, user, images) {
       : ''
     const parsed = parseDataImageUri(dataUrl)
     if (!parsed) continue
-    if (id) parts.push({ type: 'text', text: `[参考图 ${id}]` })
+    validEntries.push({ id, dataUrl, parsed })
+  }
+  if (!validEntries.length) return parts
+
+  const resolvedParts = await Promise.all(validEntries.map(async ({ id, dataUrl, parsed }) => {
     if (attachments?.saveImage) {
-      const attachment = await attachments.saveImage({
-        data: Buffer.from(parsed.data, 'base64'),
-        mediaType: parsed.mediaType,
-      })
-      parts.push({ type: 'image', attachment })
-    } else {
-      parts.push({
+      let pending = attachmentCache?.get(dataUrl)
+      if (!pending) {
+        pending = Promise.resolve().then(() => attachments.saveImage({
+          data: Buffer.from(parsed.data, 'base64'),
+          mediaType: parsed.mediaType,
+        }))
+        if (attachmentCache) {
+          attachmentCache.set(dataUrl, pending)
+          pending.catch(() => {
+            if (attachmentCache.get(dataUrl) === pending) attachmentCache.delete(dataUrl)
+          })
+        }
+      }
+      const attachment = await pending
+      return { id, imagePart: { type: 'image', attachment } }
+    }
+    return {
+      id,
+      imagePart: {
         type: 'image',
         mediaType: parsed.mediaType,
         mimeType: parsed.mediaType,
         data: parsed.data,
-      })
+      },
     }
+  }))
+
+  for (const { id, imagePart } of resolvedParts) {
+    if (id) parts.push({ type: 'text', text: `[参考图 ${id}]` })
+    parts.push(imagePart)
   }
   return parts
 }
@@ -191,10 +213,10 @@ async function buildUserContent(ctx, user, images) {
  * 调一次模型并流式回传文本。插件在会话之外调模型，所以自己带一个会话标识。
  * 支持可选传入 images（data:image/...;base64,...）：若当前模型不支持识图，自动优雅降级为纯文本重试并触发 onImageFallback。
  * @param {object} ctx - Cordis 上下文。
- * @param {{system: string, user: string, images?: Array<string | {id: string, dataUrl: string}>, task: string, maxTokens?: number, signal?: AbortSignal, onText?: (delta: string) => void, onFinish?: (kind: string | undefined) => void, onImageFallback?: (reason: string) => void}} request - 请求。
+ * @param {{system: string, user: string, images?: Array<string | {id: string, dataUrl: string}>, task: string, maxTokens?: number, signal?: AbortSignal, onText?: (delta: string) => void, onFinish?: (kind: string | undefined) => void, onImageFallback?: (reason: string) => void, visionSupport?: boolean | null, attachmentCache?: Map<string, Promise<object>>}} request - 请求。
  * @returns {Promise<string>} 完整文本。
  */
-export async function callModel(ctx, { system, user, images = [], strictImages = false, task, maxTokens = 8000, signal, onText, onFinish, onImageFallback }) {
+export async function callModel(ctx, { system, user, images = [], strictImages = false, task, maxTokens = 8000, signal, onText, onFinish, onImageFallback, visionSupport, attachmentCache }) {
   const info = modelInfo(ctx)
   if (!info) throw new Error('当前没有可用模型，请先在 DeepSeek Harness 里配置好模型')
   const llm = ctx.get('llm')
@@ -207,7 +229,7 @@ export async function callModel(ctx, { system, user, images = [], strictImages =
     const call = await llm.prepareCall({ provider: info.provider, model: info.model, maxTokens }, signal, controls => controls)
     let text = ''
     let finishKind
-    const content = await buildUserContent(ctx, user, useImages ? validImages : [])
+    const content = await buildUserContent(ctx, user, useImages ? validImages : [], attachmentCache)
     for await (const chunk of call.stream({
       ...call.config,
       system,
@@ -232,7 +254,7 @@ export async function callModel(ctx, { system, user, images = [], strictImages =
   try {
     let shouldSendImages = validImages.length > 0
     if (shouldSendImages) {
-      const vision = await modelVisionSupport(ctx)
+      const vision = visionSupport !== undefined ? visionSupport : await modelVisionSupport(ctx)
       if (vision === false) {
         if (strictImages) {
           throw Object.assign(

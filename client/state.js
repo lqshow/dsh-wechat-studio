@@ -112,7 +112,7 @@ function accept(data) {
   }
   clearTimeout(timer)
   if (current?.job || current?.coverJob || current?.inlineDiagramJob || current?.xhsJob || current?.imageImport?.total) {
-    timer = setTimeout(refresh, current?.xhsJob ? 650 : 900)
+    timer = setTimeout(refresh, current?.xhsJob ? 400 : 900)
   }
 }
 
