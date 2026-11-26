@@ -1,6 +1,6 @@
 {
   "name": "dsh-wechat-studio",
-  "version": "0.2.10",
+  "version": "0.3.0",
   "description": "DeepSeek Harness 插件「公众号成稿台」：写稿、按段改稿、朱雀报告质检、公众号排版预览和一键复制。",
   "type": "module",
   "main": "src/host.js",
