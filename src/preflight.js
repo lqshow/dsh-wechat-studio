@@ -18,6 +18,14 @@ const IMG_RE = /!\[(?:\\.|[^\]\\])*\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/g
 const MD_LINK_RE = /\[([^\]]+)\]\(<?(https?:\/\/[^)\s>]+)>?(?:\s+"[^"]*")?\)/gi
 const BARE_URL_RE = /https?:\/\/[^\s<>"'`）)】》」』，。！？；：、]+/gi
 const PLACEHOLDER_RE = /\[(?:可补|截图)[：:][^\]\n]*\]/g
+const URL_LIKE_ENTRY_RE = /(?:https?:\/\/|\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}\/)/i
+
+function normalizeList(list) {
+  return [...new Set(
+    (Array.isArray(list) ? list : [])
+      .map(s => String(s ?? '').trim()).filter(Boolean),
+  )]
+}
 
 function stripFencedCode(text) {
   const lines = String(text ?? '').split('\n')
@@ -139,19 +147,23 @@ function isDuplicateLayoutIssue(issue) {
 /**
  * 执行零成本、确定性的发布防踩坑体检。
  * @param {{title?: string, markdown?: string, blocks?: Array<{id?: string, text: string}>}} input
- * @param {{fixedLines?: string[], customWords?: string[], maxParagraphChars?: number, maxDenseChars?: number, layoutIssues?: string[]}} [options]
+ * @param {{fixedLines?: string[], customWords?: string[], maxParagraphChars?: number, maxDenseChars?: number, layoutIssues?: string[], sponsoredBrief?: {partner?: string, mustInclude?: string[], taboo?: string[]} | null}} [options]
  */
 export function runPreflight(input = {}, options = {}) {
   const { title, blocks } = normalizeBlocks(input)
   const fixedLines = (Array.isArray(options.fixedLines) ? options.fixedLines : [])
     .map(s => String(s ?? '').trim()).filter(Boolean)
-  const customWords = [...new Set(
-    (Array.isArray(options.customWords) ? options.customWords : [])
-      .map(s => String(s ?? '').trim()).filter(Boolean),
-  )]
+  const customWords = normalizeList(options.customWords)
   const maxParagraphChars = options.maxParagraphChars ?? DEFAULT_MAX_PARAGRAPH_CHARS
   const maxDenseChars = options.maxDenseChars ?? DEFAULT_MAX_DENSE_CHARS
   const layoutIssues = Array.isArray(options.layoutIssues) ? options.layoutIssues : []
+  const sponsoredBrief = options.sponsoredBrief && typeof options.sponsoredBrief === 'object'
+    ? options.sponsoredBrief
+    : null
+  const sponsoredPartner = String(sponsoredBrief?.partner ?? '').trim()
+  const sponsoredMustInclude = normalizeList(sponsoredBrief?.mustInclude)
+  const sponsoredTaboo = normalizeList(sponsoredBrief?.taboo)
+  const hasSponsoredChecks = sponsoredMustInclude.length > 0 || sponsoredTaboo.length > 0
 
   const items = []
   const stats = { chars: 0, titleChars: title.length, links: 0, images: 0, longParagraphs: 0 }
@@ -226,6 +238,33 @@ export function runPreflight(input = {}, options = {}) {
   }
 
   const builtinWords = [...DEFAULT_COMPLIANCE_WORDS.share, ...DEFAULT_COMPLIANCE_WORDS.extreme]
+  const visibleTitle = hasSponsoredChecks ? plainOf(stripInlineCode(title).replace(IMG_RE, ' ')) : ''
+  const titleLinks = hasSponsoredChecks ? extractLinks(title) : []
+  const visibleCorpusParts = visibleTitle ? [visibleTitle] : []
+  const allLinks = [...titleLinks]
+
+  if (sponsoredTaboo.length) {
+    const titleLower = visibleTitle.toLowerCase()
+    const titleLinksLower = titleLinks.map(u => u.toLowerCase())
+    const hitTitleTaboo = sponsoredTaboo.filter(word => {
+      const lower = word.toLowerCase()
+      return titleLower.includes(lower) || titleLinksLower.some(u => u.includes(lower))
+    })
+    if (hitTitleTaboo.length) {
+      items.push({
+        id: 'sponsored-taboo',
+        severity: 'warn',
+        category: 'sponsored',
+        title: `标题命中商单禁忌：${hitTitleTaboo.slice(0, 3).join('、')}`,
+        detail: sponsoredPartner
+          ? `命中商单（${sponsoredPartner}）禁忌红线，请核对是否需要修改或删除（不阻止发布）。`
+          : '命中商单禁忌红线，请核对是否需要修改或删除（不阻止发布）。',
+        blockId: null,
+        blockNumber: null,
+        matches: hitTitleTaboo,
+      })
+    }
+  }
 
   blocks.forEach((block, index) => {
     const number = index + 1
@@ -369,9 +408,65 @@ export function runPreflight(input = {}, options = {}) {
         })
       }
     }
+
+    // 2f. 商单双语料收集与禁忌红线检查（跳过围栏代码、行内代码与图片语法，永远只报 warn）
+    if (hasSponsoredChecks) {
+      const visibleText = plain ? plainOf(noInlineCode.replace(IMG_RE, ' ')) : ''
+      if (visibleText) visibleCorpusParts.push(visibleText)
+      if (links.length) allLinks.push(...links)
+
+      if (sponsoredTaboo.length) {
+        const visibleLower = visibleText.toLowerCase()
+        const blockLinksLower = links.map(u => u.toLowerCase())
+        const hitTaboo = sponsoredTaboo.filter(word => {
+          const lower = word.toLowerCase()
+          return visibleLower.includes(lower) || blockLinksLower.some(u => u.includes(lower))
+        })
+        if (hitTaboo.length) {
+          items.push({
+            id: 'sponsored-taboo',
+            severity: 'warn',
+            category: 'sponsored',
+            title: `第 ${number} 段命中商单禁忌：${hitTaboo.slice(0, 3).join('、')}`,
+            detail: sponsoredPartner
+              ? `命中商单（${sponsoredPartner}）禁忌红线，请核对是否需要修改或删除（不阻止发布）。`
+              : '命中商单禁忌红线，请核对是否需要修改或删除（不阻止发布）。',
+            blockId: block.id,
+            blockNumber: number,
+            matches: hitTaboo,
+          })
+        }
+      }
+    }
   })
 
   flushDense()
+
+  // 2g. 商单必带信息核对（URL 片段查真实链接 + 可见正文，普通文本仅查可见正文，大小写不敏感，永远只报 warn）
+  if (sponsoredMustInclude.length) {
+    const fullVisibleLower = visibleCorpusParts.join('\n').toLowerCase()
+    const allLinksLower = allLinks.map(u => u.toLowerCase())
+    for (const entry of sponsoredMustInclude) {
+      const needle = entry.toLowerCase()
+      const matched = URL_LIKE_ENTRY_RE.test(entry)
+        ? (fullVisibleLower.includes(needle) || allLinksLower.some(u => u.includes(needle)))
+        : fullVisibleLower.includes(needle)
+      if (!matched) {
+        items.push({
+          id: 'sponsored-must-include',
+          severity: 'warn',
+          category: 'sponsored',
+          title: `商单必带信息未出现：${entry}`,
+          detail: sponsoredPartner
+            ? `商单（${sponsoredPartner}）要求包含「${entry}」，当前正文与链接中未检测到（不阻止发布）。`
+            : `商单要求包含「${entry}」，当前正文与链接中未检测到（不阻止发布）。`,
+          blockId: null,
+          blockNumber: null,
+          matches: [entry],
+        })
+      }
+    }
+  }
 
   // 3. 合并排版引擎专属提醒（外部图床、视频占位、SVG 禁写属性、动画卡 >3 张、横幅警告），去除与上方重复的媒体/占位项
   for (const rawIssue of layoutIssues) {

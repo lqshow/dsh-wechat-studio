@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { COVER_PROVIDER_META, COVER_RESOLUTIONS, COVER_FORMATS, MAX_COVER_COUNT, providerFormats, providerMeta } from './cover-options.js'
 // dsh-wechat-studio host 半片：/wechat-studio/* 接口。
-import { join } from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { join, resolve, sep } from 'node:path'
+import { readFile, rm } from 'node:fs/promises'
 import { defaultSelection, listModels, modelInfo, modelOverride, modelStatus, modelVisionSupport, setModelOverride, skillSources } from './ai.js'
 import { BANNER_CHOICES, BANNER_STYLES, DEFAULT_BANNER } from './banner.js'
 import { blockKind, clearSchedule, correctPublishedAt, createArticle, fixPlan, HOOK_IDS, isCheckable, listMeta, markPublished, newId, revisionChanges, setSchedule, snapshot, splitMarkdown, toMarkdown, touch, undo, unpublish } from './article.js'
@@ -36,6 +36,30 @@ import { END_MARK_STYLE_IDS, normalizeEndMark, STYLES, THEMES, detectionText, re
 import { applyRule, buildInsights, EXPERIMENT_RESULTS, importData, INSIGHTS_EMPTY, previewRule } from './insights.js'
 import { Pipeline } from './pipeline.js'
 import { runPreflight } from './preflight.js'
+import {
+  addBag,
+  addNote,
+  batchNotes,
+  clusterFreeNotes,
+  deleteBag,
+  deleteNotes,
+  deriveLinkedArticleStatus,
+  extractBriefFromRaw,
+  formatBriefMarkdown,
+  isPrepAssetReferenced,
+  PREP_EMPTY,
+  PREP_LIMITS,
+  promoteBag,
+  readPrepAsset,
+  reconcilePrep,
+  removeOrphanPrepAssets,
+  resetDeletedBagLink,
+  resolveSponsoredBrief,
+  savePrepAsset,
+  transferPromotedArticleImages,
+  updateBag,
+  updateNote,
+} from './prep.js'
 import { pdfToText } from './report.js'
 import { cacheMpHeadImg, publicSettings, readSettings, updateSettings } from './settings.js'
 import { scheduleTime as parseScheduleTime } from './schedule-time.js'
@@ -89,6 +113,140 @@ function bannerView(article) {
 async function insightsView(deps, range = 'all') {
   const [insights, state] = await Promise.all([deps.insightsStore.read(), deps.store.read()])
   return buildInsights(insights, state.articles, ['7', '30', 'all'].includes(range) ? range : 'all')
+}
+
+const prepStores = new WeakMap()
+const PREP_ASSET_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const PREP_ASSET_EXT_SET = new Set(['png', 'jpg', 'gif', 'webp'])
+
+function getPrepStore(deps) {
+  if (deps.prepStore) return deps.prepStore
+  if (!prepStores.has(deps.store)) {
+    prepStores.set(deps.store, new JsonStore(deps.store.root, { file: 'prep.json', empty: PREP_EMPTY }))
+  }
+  return prepStores.get(deps.store)
+}
+
+function sortBagNotes(notes) {
+  return (notes ?? []).slice().sort((a, b) => {
+    const pinDiff = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned))
+    if (pinDiff !== 0) return pinDiff
+    const timeDiff = String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''))
+    if (timeDiff !== 0) return timeDiff
+    return String(a.id ?? '').localeCompare(String(b.id ?? ''))
+  })
+}
+
+function enrichPrepView(prepState, articles) {
+  const bags = (prepState?.bags ?? []).map(bag => {
+    const { status: linkedArticleStatus, article } = deriveLinkedArticleStatus(bag, articles)
+    const linkedArticle = article
+      ? {
+          id: article.id,
+          title: article.title || article.topic || '未命名文章',
+          scheduledFor: article.scheduledFor ?? null,
+          publishedAt: article.publishedAt ?? null,
+          archivedAt: article.archivedAt ?? null,
+          updatedAt: article.updatedAt ?? null,
+        }
+      : null
+    return {
+      ...bag,
+      linkedArticleStatus,
+      linkedArticle,
+    }
+  })
+  return {
+    v: prepState?.v ?? 1,
+    bags,
+    notes: prepState?.notes ?? [],
+  }
+}
+
+async function prepView(prepStore, store) {
+  const [prepState, articleState] = await Promise.all([prepStore.read(), store.read()])
+  return enrichPrepView(prepState, articleState.articles)
+}
+
+function buildPrepPlaceholders(prepState) {
+  const noteCountByBag = new Map()
+  for (const note of prepState?.notes ?? []) {
+    if (note?.bagId) noteCountByBag.set(note.bagId, (noteCountByBag.get(note.bagId) ?? 0) + 1)
+  }
+  return (prepState?.bags ?? [])
+    .filter(bag => bag && !bag.archivedAt && !bag.articleId && Boolean(bag.targetDate))
+    .map(bag => ({
+      id: bag.id,
+      title: bag.title,
+      type: bag.type,
+      partner: bag.type === 'sponsored' ? (bag.brief?.partner ?? '') : '',
+      targetDate: bag.targetDate,
+      noteCount: noteCountByBag.get(bag.id) ?? 0,
+    }))
+    .sort((a, b) => a.targetDate.localeCompare(b.targetDate)
+      || Number(b.type === 'sponsored') - Number(a.type === 'sponsored')
+      || a.id.localeCompare(b.id))
+}
+
+function buildSourceBagView(article, prepState, articles) {
+  if (!article?.sourceBagId && !article?.sponsoredSnapshot) return null
+  const bag = article.sourceBagId
+    ? (prepState?.bags ?? []).find(b => b && b.id === article.sourceBagId) ?? null
+    : null
+  const resolvedBrief = resolveSponsoredBrief(article, prepState)
+  if (bag) {
+    const { status: linkedArticleStatus } = deriveLinkedArticleStatus(bag, articles)
+    const notes = sortBagNotes((prepState?.notes ?? []).filter(n => n && n.bagId === bag.id))
+    return {
+      id: bag.id,
+      title: bag.title,
+      type: bag.type,
+      brief: bag.type === 'sponsored' ? resolvedBrief : null,
+      notes,
+      linkedArticleStatus,
+      exists: true,
+    }
+  }
+  if (resolvedBrief) {
+    return {
+      id: article.sourceBagId ?? null,
+      title: article.topic || resolvedBrief.partner || '',
+      type: 'sponsored',
+      brief: resolvedBrief,
+      notes: [],
+      linkedArticleStatus: null,
+      exists: false,
+    }
+  }
+  return {
+    id: article.sourceBagId ?? null,
+    title: article.topic || '',
+    type: 'topic',
+    brief: null,
+    notes: [],
+    linkedArticleStatus: null,
+    exists: false,
+  }
+}
+
+async function cleanupUnreferencedPrepAssets(store, prepStore, candidateImages) {
+  if (!candidateImages?.length) return
+  const [prepState, articleState] = await Promise.all([prepStore.read(), store.read()])
+  if (store.problems.length || prepStore.problems.length) return
+  const seen = new Set()
+  const dir = resolve(store.root, 'prep-assets')
+  for (const img of candidateImages) {
+    const assetId = typeof img?.assetId === 'string' ? img.assetId.toLowerCase() : ''
+    const ext = typeof img?.ext === 'string' ? img.ext.toLowerCase() : ''
+    if (!PREP_ASSET_UUID_RE.test(assetId) || !PREP_ASSET_EXT_SET.has(ext)) continue
+    const key = `${assetId}.${ext}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (isPrepAssetReferenced(assetId, prepState, articleState.articles)) continue
+    const target = resolve(dir, key)
+    if (!target.startsWith(dir + sep)) continue
+    await rm(target, { force: true }).catch(() => {})
+  }
 }
 
 const imageJobs = new WeakMap()
@@ -467,7 +625,7 @@ function startImageImport(deps, article, urls) {
   }).finally(() => jobs.delete(article.id))
 }
 
-function view(article, pipeline, store, inlineStyles = [], inlineStyleWarnings = [], settings = {}) {
+function view(article, pipeline, store, inlineStyles = [], inlineStyleWarnings = [], settings = {}, prepState = PREP_EMPTY, articles = []) {
   if (!article) return null
   const currentText = new Map(article.blocks.map(block => [block.id, block.text]))
   const previousText = new Map()
@@ -518,7 +676,15 @@ function view(article, pipeline, store, inlineStyles = [], inlineStyleWarnings =
     inlineDiagramMessage: article.inlineMessage ?? null,
     inlineDiagramStyles: inlineStyles,
     inlineDiagramStyleWarnings: inlineStyleWarnings,
-    preflight: runPreflight({ title: article.title, blocks: article.blocks }, { fixedLines: settings.fixedLines, customWords: settings.preflightWords }),
+    sourceBag: buildSourceBagView(article, prepState, articles),
+    preflight: runPreflight(
+      { title: article.title, blocks: article.blocks },
+      {
+        fixedLines: settings.fixedLines,
+        customWords: settings.preflightWords,
+        sponsoredBrief: resolveSponsoredBrief(article, prepState),
+      },
+    ),
   }
 }
 
@@ -531,15 +697,16 @@ async function renderStylePreviewMarkdown(storeRoot, profile) {
   }
 }
 
-async function snapshotState(ctx, store, pipeline) {
+async function snapshotState(ctx, store, pipeline, prepStore) {
   const state = await store.read()
   const current = state.articles.find(a => a.id === state.currentId && !a.archivedAt) ?? null
   const info = modelInfo(ctx)
-  const [settings, inlineCatalog, styleState, modelSupportsImages] = await Promise.all([
+  const [settings, inlineCatalog, styleState, modelSupportsImages, prepState] = await Promise.all([
     readSettings(store.root),
     readInlineStyleCatalog(join(store.root, 'skills')),
     readStyleState(store.root),
     modelVisionSupport(ctx),
+    prepStore ? prepStore.read() : Promise.resolve(PREP_EMPTY),
   ])
   return {
     brand: settings.brand,
@@ -550,9 +717,10 @@ async function snapshotState(ctx, store, pipeline) {
     hasPersonalStyle: styleState.active,
     personalStyleScopes: styleState.scopes,
     articles: state.articles.map(article => listMeta(article, { bannerReady: bannerView(article).ready })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-    current: view(current, pipeline, store, inlineCatalog.styles, inlineCatalog.warnings, settings),
+    current: view(current, pipeline, store, inlineCatalog.styles, inlineCatalog.warnings, settings, prepState, state.articles),
+    prepPlaceholders: buildPrepPlaceholders(prepState),
     model: info ? info.model : null, modelPinned: Boolean(modelOverride()), modelOk: modelStatus.ok, modelError: modelStatus.error, modelSupportsImages,
-    storageProblems: store.problems.map(p => p.message),
+    storageProblems: [...store.problems, ...(prepStore?.problems ?? [])].map(p => p.message),
   }
 }
 
@@ -609,14 +777,43 @@ function mustPastPublication(at) {
  */
 export async function route(deps, req, res) {
   const { ctx, store, pipeline } = deps
+  const prepStore = getPrepStore(deps)
   const url = new URL(req.url, 'http://local')
   const path = url.pathname.replace(/^.*\/wechat-studio\/?/, '')
-  const ok = async () => json(res, 200, await snapshotState(ctx, store, pipeline))
+  const ok = async () => json(res, 200, await snapshotState(ctx, store, pipeline, prepStore))
   const get = req.method === 'GET'
-  if (!get && req.method !== 'POST') return json(res, 405, { error: '不支持的请求方法' })
+  const patch = req.method === 'PATCH'
+  if (!get && req.method !== 'POST' && !patch) return json(res, 405, { error: '不支持的请求方法' })
+  if (patch && path !== 'prep/notes/update' && path !== 'prep/bags/update') {
+    return json(res, 405, { error: '不支持的请求方法' })
+  }
 
   if (get) {
     if (path === 'state') return ok()
+    if (path === 'prep') {
+      if (!store.problems.length && !prepStore.problems.length) {
+        await reconcilePrep(prepStore, store)
+      }
+      return json(res, 200, await prepView(prepStore, store))
+    }
+    if (path === 'prep/assets') {
+      try {
+        const assetId = (url.searchParams.get('id') ?? '').trim().toLowerCase()
+        let ext = (url.searchParams.get('ext') ?? '').trim().toLowerCase()
+        if (!ext && PREP_ASSET_UUID_RE.test(assetId)) {
+          const prepState = await prepStore.read()
+          const matched = (prepState.notes ?? []).find(n => n?.image?.assetId?.toLowerCase() === assetId)
+          if (matched?.image?.ext) ext = String(matched.image.ext).toLowerCase()
+        }
+        const { buffer, mimeType } = await readPrepAsset(store.root, assetId, ext)
+        res.setHeader('content-type', mimeType)
+        res.setHeader('cache-control', 'private, max-age=31536000, immutable')
+        res.setHeader('x-content-type-options', 'nosniff')
+        return res.end(buffer)
+      } catch (err) {
+        return json(res, err.status || 404, { error: err.message || '备稿图片不存在。' })
+      }
+    }
     if (path === 'version') return json(res, 200, await deps.versionChecker.check())
     if (path === 'settings') return json(res, 200, { ...publicSettings(await readSettings(store.root)), version: VERSION })
     if (path === 'models') return json(res, 200, { providers: await listModels(ctx), default: defaultSelection(ctx), current: modelOverride() })
@@ -763,6 +960,22 @@ export async function route(deps, req, res) {
     const text = await pdfToText(await readBuffer(req, MAX_PDF))
     pipeline.report(article.id, text)
     return ok()
+  }
+
+  if (path === 'prep/assets') {
+    let image
+    try {
+      image = await readBuffer(req, PREP_LIMITS.maxAssetBytes)
+    } catch (err) {
+      if (err.status === 413) return json(res, 400, { error: '本地图片不能超过 10 MB。' })
+      throw err
+    }
+    const name = url.searchParams.get('name') ?? ''
+    const asset = await savePrepAsset(store.root, image, name)
+    return json(res, 200, {
+      ...asset,
+      url: `wechat-studio/prep/assets?${new URLSearchParams({ id: asset.assetId, ext: asset.ext })}`,
+    })
   }
 
   if (path === 'images/upload') {
@@ -965,6 +1178,7 @@ export async function route(deps, req, res) {
     case 'articles/duplicate': {
       let cleanup = null
       let rollback = null
+      const prepState = await prepStore.read()
       try {
         await store.update(async state => {
           const source = mustFind(state, body.id)
@@ -972,7 +1186,8 @@ export async function route(deps, req, res) {
           if (coverJobMap(store).has(source.id) || imageJobMap(store).has(source.id) || diagramJobMap(store).has(source.id)) {
             throw Object.assign(new Error('请等封面生成、图片转存或插图任务完成后再创建副本。'), { status: 409 })
           }
-          const duplicated = await duplicateArticle(store.root, source)
+          const latestBrief = resolveSponsoredBrief(source, prepState)
+          const duplicated = await duplicateArticle(store.root, source, { sponsoredSnapshot: latestBrief })
           const prevCurrentId = state.currentId
           cleanup = duplicated.cleanup
           rollback = () => {
@@ -1309,6 +1524,20 @@ export async function route(deps, req, res) {
         touch(article)
       })
       return ok()
+    case 'block/append':
+      await store.update(state => {
+        const article = mustFind(state, body.id)
+        mustActive(article, '归档稿件不能修改正文，请先恢复。')
+        notBusy(pipeline, article.id)
+        const value = String(body.text ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 20000)
+        if (!value) throw Object.assign(new Error('请输入正文内容。'), { status: 400 })
+        const pieces = splitMarkdown(value, { bodyOnly: true }).blocks
+        const texts = pieces.length ? pieces : [value]
+        snapshot(article, '手写正文')
+        article.blocks.push(...texts.map(text => ({ id: newId(), text, check: null })))
+        touch(article)
+      })
+      return ok()
     case 'block/update':
       await store.update(state => {
         const article = mustFind(state, body.id)
@@ -1483,7 +1712,7 @@ export async function route(deps, req, res) {
       }
       const result = await pushWechatDraft({ article, html: body.html, settings, cover: coverImage, fetchImpl: deps.fetchImpl })
       // 返回完整快照和其它 act 一样，warnings 让页面在推送成功后也能看到占位封面这类提醒
-      return json(res, 200, { ...(await snapshotState(ctx, store, pipeline)), ok: true, mediaId: result.mediaId, warnings: result.warnings })
+      return json(res, 200, { ...(await snapshotState(ctx, store, pipeline, prepStore)), ok: true, mediaId: result.mediaId, warnings: result.warnings })
     }
     case 'zhuque/detect': {
       const article = mustFind(await store.read(), body.id)
@@ -1704,6 +1933,269 @@ export async function route(deps, req, res) {
       await deleteDerivative(store, { id: article.id, platform: body.platform })
       return ok()
     }
+    case 'prep/notes': {
+      let image = body.image ?? null
+      if (!image && body.imageAssetId) {
+        const assetId = String(body.imageAssetId).trim().toLowerCase()
+        const candidates = body.ext ? [String(body.ext).trim().toLowerCase()] : ['png', 'jpg', 'gif', 'webp']
+        let resolved = null
+        for (const ext of candidates) {
+          try {
+            const { buffer, mimeType } = await readPrepAsset(store.root, assetId, ext)
+            resolved = { assetId, ext, mimeType, bytes: buffer.length, ...(body.name ? { name: body.name } : {}) }
+            break
+          } catch (err) {
+            if (err.status !== 404) throw err
+          }
+        }
+        if (!resolved) throw Object.assign(new Error('备稿图片不存在。'), { status: 404 })
+        image = resolved
+      }
+      const note = await prepStore.update(state => addNote(state, {
+        text: body.text,
+        bagId: body.bagId,
+        image,
+        pinned: body.pinned,
+        included: body.included,
+      }))
+      return json(res, 200, { note, ...(await prepView(prepStore, store)) })
+    }
+    case 'prep/notes/update': {
+      const noteId = body.id ?? body.noteId
+      const patch = {}
+      for (const key of ['text', 'bagId', 'pinned', 'included']) {
+        if (Object.hasOwn(body, key)) patch[key] = body[key]
+      }
+      const note = await prepStore.update(state => updateNote(state, noteId, patch))
+      return json(res, 200, { note, ...(await prepView(prepStore, store)) })
+    }
+    case 'prep/notes/delete': {
+      const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : [])
+      const { deleted, deletedIds } = await prepStore.update(state => deleteNotes(state, ids))
+      const candidateImages = deleted.map(n => n.image).filter(Boolean)
+      await cleanupUnreferencedPrepAssets(store, prepStore, candidateImages)
+      return json(res, 200, { deletedIds, ...(await prepView(prepStore, store)) })
+    }
+    case 'prep/notes/batch': {
+      const result = await prepStore.update(state => batchNotes(state, {
+        action: body.action,
+        noteIds: body.noteIds,
+        bagId: body.bagId,
+        title: body.title,
+        type: body.type,
+        targetDate: body.targetDate,
+        brief: body.brief,
+        onlyFree: body.onlyFree,
+        onlyLoose: body.onlyLoose,
+      }))
+      return json(res, 200, { ...result, ...(await prepView(prepStore, store)) })
+    }
+    case 'prep/notes/insert-to-article': {
+      const articleId = body.articleId ?? body.id
+      const noteId = body.noteId
+      if (!noteId) throw Object.assign(new Error('请指定要插入的纸条。'), { status: 400 })
+      const [articleState, prepState] = await Promise.all([store.read(), prepStore.read()])
+      const article = mustFind(articleState, articleId)
+      mustActive(article, '归档稿件不能插入素材，请先恢复。')
+      notBusy(pipeline, article.id)
+      const note = (prepState.notes ?? []).find(n => n.id === noteId)
+      if (!note) throw Object.assign(new Error('纸条不存在。'), { status: 404 })
+
+      let insertedText = ''
+      let fallback = false
+      let uploadedUrl = null
+
+      if (note.kind === 'image' && note.image) {
+        const caption = String(note.text || note.image.name || '截图').replace(/[\r\n]+/g, ' ').trim()
+        const safeAlt = caption.replace(/([\\[\]])/g, '\\$1')
+        const settings = await readSettings(store.root)
+        const cloudinary = settings.cloudinary
+        const hasCloudinary = Boolean(cloudinary?.cloudName && cloudinary?.apiKey && cloudinary?.apiSecret)
+        if (hasCloudinary) {
+          if (note.image.cloudinaryUrl) {
+            uploadedUrl = note.image.cloudinaryUrl
+          } else {
+            const { buffer } = await readPrepAsset(store.root, note.image.assetId, note.image.ext)
+            uploadedUrl = await uploadLocalImage(buffer, cloudinary, deps.fetchImpl)
+            await prepStore.update(state => {
+              const target = state.notes.find(n => n.id === note.id)
+              if (target?.image) {
+                target.image.cloudinaryUrl = uploadedUrl
+                target.updatedAt = new Date().toISOString()
+              }
+            })
+          }
+          insertedText = `![${safeAlt}](${uploadedUrl})`
+        } else {
+          fallback = true
+          insertedText = `[截图：${caption}]`
+        }
+      } else {
+        insertedText = String(note.text ?? '').replace(/\r\n?/g, '\n').trim()
+        if (!insertedText) throw Object.assign(new Error('纸条内容为空，无法插入。'), { status: 400 })
+      }
+
+      const insertedBlockIds = await store.update(state => {
+        const target = mustFind(state, article.id)
+        mustActive(target, '归档稿件不能插入素材，请先恢复。')
+        notBusy(pipeline, target.id)
+        snapshot(target, '插入备稿素材')
+        const pieces = splitMarkdown(insertedText, { bodyOnly: true }).blocks
+        const newBlocks = (pieces.length ? pieces : [insertedText]).map(text => ({ id: newId(), text, check: null }))
+        target.blocks.push(...newBlocks)
+        touch(target)
+        return newBlocks.map(b => b.id)
+      })
+
+      const stateSnap = await snapshotState(ctx, store, pipeline, prepStore)
+      return json(res, 200, {
+        ...stateSnap,
+        fallback,
+        insertedText,
+        insertedBlockIds,
+        ...(uploadedUrl ? { url: uploadedUrl } : {}),
+        ...(fallback ? { warnings: ['未配置图床，已插入截图占位'] } : {}),
+      })
+    }
+    case 'prep/bags': {
+      const bag = await prepStore.update(state => addBag(state, {
+        title: body.title,
+        type: body.type,
+        targetDate: body.targetDate,
+        brief: body.brief,
+      }))
+      return json(res, 200, { bag, ...(await prepView(prepStore, store)) })
+    }
+    case 'prep/bags/update': {
+      const bagId = body.id ?? body.bagId
+      const patch = {}
+      for (const key of ['title', 'type', 'targetDate', 'brief', 'archived']) {
+        if (Object.hasOwn(body, key)) patch[key] = body[key]
+      }
+      const bag = await prepStore.update(state => updateBag(state, bagId, patch))
+      return json(res, 200, { bag, ...(await prepView(prepStore, store)) })
+    }
+    case 'prep/bags/delete': {
+      const bagId = body.id ?? body.bagId
+      const result = await prepStore.update(state => deleteBag(state, bagId, { keepNotes: body.keepNotes !== false }))
+      if (result.deletedNotes?.length) {
+        const candidateImages = result.deletedNotes.map(n => n.image).filter(Boolean)
+        await cleanupUnreferencedPrepAssets(store, prepStore, candidateImages)
+      }
+      return json(res, 200, {
+        deletedBagId: result.bag.id,
+        releasedNoteIds: result.releasedNoteIds,
+        deletedNoteIds: result.deletedNotes.map(n => n.id),
+        ...(await prepView(prepStore, store)),
+      })
+    }
+    case 'prep/bags/reset-link': {
+      const bagId = body.id ?? body.bagId
+      const [prepState, articleState] = await Promise.all([prepStore.read(), store.read()])
+      if (store.problems.length) {
+        throw Object.assign(new Error('部分稿件读取异常，暂不允许重置关联。'), { status: 409 })
+      }
+      const bag = (prepState.bags ?? []).find(b => b.id === bagId)
+      if (!bag) throw Object.assign(new Error('选题袋不存在。'), { status: 404 })
+      const { status } = deriveLinkedArticleStatus(bag, articleState.articles)
+      if (status === 'active' || status === 'archived') {
+        throw Object.assign(new Error('关联稿件仍然存在，无法重置关联。'), { status: 409 })
+      }
+      const updated = await prepStore.update(state => resetDeletedBagLink(state, bagId))
+      return json(res, 200, { bag: updated, ...(await prepView(prepStore, store)) })
+    }
+    case 'prep/bags/promote': {
+      if (!store.problems.length && !prepStore.problems.length) {
+        await reconcilePrep(prepStore, store)
+      }
+      const bagId = body.bagId ?? (body.noteIds ? undefined : body.id)
+      const promoted = await promoteBag({
+        prepStore,
+        store,
+        bagId,
+        noteIds: body.noteIds,
+        title: body.title,
+        mode: body.mode,
+        markdown: body.markdown,
+        operationId: body.operationId,
+        scheduleTime: body.scheduleTime,
+      })
+
+      let imageTransfer = null
+      let warnings = []
+      const article = (await store.read()).articles.find(a => a.id === promoted.articleId)
+
+      if (promoted.mode === 'import') {
+        const settings = await readSettings(store.root)
+        imageTransfer = await transferPromotedArticleImages({
+          store,
+          prepStore,
+          articleId: promoted.articleId,
+          feishuUrls: promoted.feishuUrls,
+          prepAssetRefs: promoted.prepAssetRefs,
+          settings,
+          fetchImpl: deps.fetchImpl,
+        })
+        warnings = imageTransfer.warnings ?? []
+        if (article && !article.titles.length && body.titles !== false && !pipeline.job(promoted.articleId)) {
+          pipeline.titles?.(promoted.articleId)
+        }
+      } else if (promoted.mode === 'ai') {
+        if (article && article.blocks.length === 0 && !pipeline.job(promoted.articleId)) {
+          pipeline.draft?.(promoted.articleId)
+        }
+      }
+
+      const [stateSnap, prepSnap] = await Promise.all([
+        snapshotState(ctx, store, pipeline, prepStore),
+        prepView(prepStore, store),
+      ])
+      return json(res, 200, {
+        ...stateSnap,
+        prep: prepSnap,
+        articleId: promoted.articleId,
+        bagId: promoted.bagId,
+        created: promoted.created,
+        mode: promoted.mode,
+        scheduledFor: promoted.scheduledFor,
+        imageTransfer,
+        warnings,
+      })
+    }
+    case 'prep/bags/brief-markdown': {
+      const bagId = body.id ?? body.bagId
+      const prepState = await prepStore.read()
+      const bag = (prepState.bags ?? []).find(b => b.id === bagId)
+      if (!bag) throw Object.assign(new Error('选题袋不存在。'), { status: 404 })
+      const bagNotes = (prepState.notes ?? []).filter(n => n.bagId === bag.id)
+      return json(res, 200, {
+        bagId: bag.id,
+        markdown: formatBriefMarkdown(bag, bagNotes, { root: store.root }),
+      })
+    }
+    case 'prep/ai/extract-brief': {
+      const controller = new AbortController()
+      const onClose = () => { if (!res.writableEnded) controller.abort() }
+      res.on?.('close', onClose)
+      try {
+        const brief = await extractBriefFromRaw(ctx, body.rawText, { signal: controller.signal })
+        return json(res, 200, brief)
+      } finally {
+        res.off?.('close', onClose)
+      }
+    }
+    case 'prep/ai/cluster-notes': {
+      const prepState = await prepStore.read()
+      const controller = new AbortController()
+      const onClose = () => { if (!res.writableEnded) controller.abort() }
+      res.on?.('close', onClose)
+      try {
+        const clusters = await clusterFreeNotes(ctx, prepState.notes, { signal: controller.signal })
+        return json(res, 200, { clusters })
+      } finally {
+        res.off?.('close', onClose)
+      }
+    }
     case 'style/restore': {
       const result = await restoreDefaultStyle(store.root, { restoreBackup: body.restoreBackup === true })
       return json(res, 200, {
@@ -1759,26 +2251,32 @@ export function requestRejection(ctx, req) {
   return 403
 }
 
-export function createHandler(ctx, { store = new Store(), fetchImpl, getAuthCtx } = {}) {
+export function createHandler(ctx, { store = new Store(), prepStore = new JsonStore(store.root, { file: 'prep.json', empty: PREP_EMPTY }), fetchImpl, getAuthCtx } = {}) {
   const pipeline = new Pipeline({ ctx, store, skillsDir: join(store.root, 'skills'), fetchImpl })
   const insightsStore = new JsonStore(store.root, { file: 'insights.json', empty: INSIGHTS_EMPTY })
   const versionChecker = createVersionChecker({ currentVersion: VERSION, fetchImpl })
-  const deps = { ctx, store, pipeline, insightsStore, versionChecker, fetchImpl }
-  const inlineCleanup = (async () => {
-    const state = await store.read()
-    for (const problem of store.problems) {
+  const deps = { ctx, store, prepStore, pipeline, insightsStore, versionChecker, fetchImpl }
+  const startupReady = (async () => {
+    const [state] = await Promise.all([store.read(), prepStore.read()])
+    for (const problem of [...store.problems, ...prepStore.problems]) {
       const warn = ctx.get('logger')?.warn
       if (typeof warn === 'function') warn(problem.message)
       else console.warn(problem.message)
     }
     // 有稿件没加载出来时，无法判断哪些插图是孤儿，宁可不清。
-    if (store.problems.length) return
-    await removeOrphanInlineImages(store.root, state.articles)
+    if (!store.problems.length) {
+      await removeOrphanInlineImages(store.root, state.articles)
+    }
+    if (!store.problems.length && !prepStore.problems.length) {
+      await reconcilePrep(prepStore, store)
+      const latestPrep = await prepStore.read()
+      await removeOrphanPrepAssets(store.root, latestPrep, state.articles)
+    }
   })().catch(() => {})
   // 启动时恢复用户在插件里选过的模型
   readSettings(store.root).then(saved => setModelOverride(saved.model)).catch(() => {})
   return async (req, res) => {
-    await inlineCleanup
+    await startupReady
     try {
       const rejection = requestRejection(getAuthCtx ? getAuthCtx() : ctx, req)
       if (rejection) return json(res, rejection, { error: '未授权' })

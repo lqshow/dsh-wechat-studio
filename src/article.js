@@ -13,6 +13,7 @@ export function newId(prefix = 'b') {
 }
 
 const HISTORY_MAX = 20
+const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 /**
  * 把 Markdown 切成 front matter、标题和正文块。代码块内部的空行不切。
@@ -93,16 +94,28 @@ export function isCheckable(text) {
   return ['para', 'quote', 'list'].includes(kind) && plainOf(text).length >= 20
 }
 
-export function createArticle({ topic = '', material = '', markdown = '' } = {}) {
+export function createArticle({ id, topic = '', material = '', markdown = '', sourceBagId, sponsoredSnapshot } = {}) {
+  if (id !== undefined && id !== null) {
+    if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
+      throw Object.assign(new Error(`非法稿件 ID：${id}`), { status: 400 })
+    }
+  }
   const parsed = splitMarkdown(markdown)
   const now = new Date().toISOString()
-  return {
-    id: newId('a'), createdAt: now, updatedAt: now,
+  const article = {
+    id: id ?? newId('a'), createdAt: now, updatedAt: now,
     topic: String(topic).trim().slice(0, 400), material: String(material).slice(0, 60000),
     front: parsed.front, title: parsed.title, titles: [], summary: '', hook: null,
     blocks: parsed.blocks.map(text => ({ id: newId(), text, check: null })),
     chat: [], history: [], zhuque: { round: 0, lastAt: null }, inlineDiagrams: [],
   }
+  if (sourceBagId !== undefined && sourceBagId !== null && sourceBagId !== '') {
+    article.sourceBagId = String(sourceBagId)
+  }
+  if (sponsoredSnapshot !== undefined && sponsoredSnapshot !== null) {
+    article.sponsoredSnapshot = structuredClone(sponsoredSnapshot)
+  }
+  return article
 }
 
 export function setBody(article, markdown) {
@@ -308,6 +321,7 @@ export function listMeta(article, { bannerReady = false } = {}) {
     scheduledFor: article.scheduledFor ?? null,
     publishedAt: article.publishedAt ?? null,
     publishMarkedAt: article.publishMarkedAt ?? null,
+    sourceBagId: article.sourceBagId ?? null,
     readiness: readiness(article, { bannerReady }),
   }
 }

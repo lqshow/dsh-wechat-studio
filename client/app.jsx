@@ -12,7 +12,7 @@ import { COVER_STYLES, CUSTOM_COVER_STYLE_LIMITS, resolveCoverStyleName } from '
 // 稿面：左边对话改稿，中间是稿子和纸边批注，右边是标题、朱雀质检和导出。
 import React from 'react'
 import { cardMarkdown, emphasisFormats, formatSelection, insertFormats } from './editor-format.js'
-import { act, copyDetectionText, copyMarkdown, copyText, countCurrentParagraphDrafts, deleteCustomCoverStyle, getState, loadCoverStyles, loadLayout, loadModels, loadRevisions, loadSettings, loadSkills, loadStyleProfile, loadVersion, openCustomCoverStyleWizard, openStyleWizard, previewMarkdownReimport, reimportMarkdown, rememberArticleView, saveSettings, setState, testWechat, testZhuque, toast, uploadImage, uploadPortrait, uploadReport, useStudio } from './state.js'
+import { act, copyDetectionText, copyMarkdown, copyText, countCurrentParagraphDrafts, deleteCustomCoverStyle, getState, loadCoverStyles, loadLayout, loadModels, loadRevisions, loadSettings, loadSkills, loadStyleProfile, loadVersion, openCustomCoverStyleWizard, openStyleWizard, previewMarkdownReimport, reimportMarkdown, rememberArticleView, saveSettings, setQuickCaptureOpen, setState, testWechat, testZhuque, toast, uploadImage, uploadPortrait, uploadReport, useStudio } from './state.js'
 import { CustomCoverStyleCard, CustomCoverStyleWizard, CustomCoverTestBanner } from './custom-cover-style.jsx'
 import { hasUnsavedDeriveDrafts } from './derive-draft-model.js'
 import { DeriveView } from './derive.jsx'
@@ -22,6 +22,8 @@ import { InsightsView } from './insights.jsx'
 import { InlineDiagramDialog, InlineDiagramPane } from './inline-diagrams.jsx'
 import { MarkdownImportFields } from './markdown-import.jsx'
 import { AnimatedNumber, scrollBehavior, SlidingTabs, useDialogClose, usePresence, usePresenceValue, useSlidingIndicator } from './motion.jsx'
+import { isQuickCaptureShortcut } from './prep-model.js'
+import { PrepView, QuickCaptureModal, SourceBagCard } from './prep.jsx'
 import { ScheduleView } from './schedule.jsx'
 import { isSvgCardText, SvgCardBlock, SvgCardsPane } from './svg-cards.jsx'
 import { isVideoCardText, VideoCardBlock, VideoCardInsert } from './video-card.jsx'
@@ -48,6 +50,7 @@ const ICONS = {
   search: 'M7 2.5a4.5 4.5 0 100 9 4.5 4.5 0 000-9zM10.4 10.4L13.5 13.5',
   spark: 'M7 2l1.3 3.7L12 7l-3.7 1.3L7 12l-1.3-3.7L2 7l3.7-1.3zM12.5 10.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z',
   user: 'M8 8.2a2.8 2.8 0 100-5.6 2.8 2.8 0 000 5.6zM3.2 13.5a4.8 4.8 0 019.6 0',
+  quickNote: 'M10.8 2.4l2.8 2.8-7.4 7.4-3.2.5.5-3.2zM2.5 13.8h11',
 }
 
 export function Icon({ name, size = 16 }) {
@@ -868,6 +871,112 @@ function PaperTitle({ article, busy }) {
     title="点击编辑标题" onClick={start}>{article.title || '还没有标题'}</button></h1>
 }
 
+function BlankDraftCard({ article, busy }) {
+  const [composing, setComposing] = React.useState(false)
+  const [text, setText] = React.useState('')
+  const [saving, setSaving] = React.useState(false)
+  const ref = React.useRef(null)
+  const reimportReason = article.publishedAt ? '已发布稿件不能覆盖正文。'
+    : article.job || article.coverJob || article.inlineDiagramJob || article.imageImport?.total
+      ? '请等当前任务完成后再导入。' : ''
+
+  React.useEffect(() => {
+    setComposing(false)
+    setText('')
+    setSaving(false)
+  }, [article.id])
+
+  React.useLayoutEffect(() => {
+    if (!composing) return
+    const el = ref.current
+    if (!el) return
+    el.style.height = '0px'
+    el.style.height = `${Math.max(108, el.scrollHeight)}px`
+  }, [text, composing])
+
+  React.useEffect(() => {
+    if (composing) ref.current?.focus({ preventScroll: true })
+  }, [composing])
+
+  const save = async () => {
+    const trimmed = text.trim()
+    if (!trimmed || saving || busy) return
+    setSaving(true)
+    const ok = await act('block/append', { id: article.id, text: trimmed })
+    setSaving(false)
+    if (ok) {
+      setText('')
+      setComposing(false)
+    }
+  }
+
+  if (composing) {
+    return (
+      <div
+        className="ws-editor ws-blank-editor"
+        onKeyDown={event => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            if (!saving) setComposing(false)
+          }
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+            event.preventDefault()
+            void save()
+          }
+        }}
+      >
+        <div className="ws-editor-tools">
+          <span>写下第一段</span>
+          <span className="ws-muted ws-small">空一行会自动分段</span>
+        </div>
+        <textarea
+          ref={ref}
+          className="ws-edit"
+          value={text}
+          aria-label="写下第一段正文"
+          readOnly={saving}
+          maxLength={20000}
+          placeholder="直接开始写正文…（支持 Markdown，空一行可一次写多段）"
+          onChange={e => setText(e.target.value)}
+        />
+        <div className="ws-editor-footer">
+          <span role="status">{saving ? '正在保存…' : '⌘ / Ctrl + Enter 保存，Esc 取消'}</span>
+          <div>
+            <button type="button" className="ws-btn" disabled={saving} onClick={() => setComposing(false)}>取消</button>
+            <button type="button" className="ws-btn is-primary" disabled={saving || busy || !text.trim()} onClick={() => void save()}>保存正文</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="ws-blank-draft">
+      <p className="ws-blank-draft-title">这篇稿面已备好，等你落笔</p>
+      <p className="ws-blank-draft-desc">
+        {article.sourceBag
+          ? '右侧「原备料袋」已为你展开要点与攒好的想法——可以直接动笔写第一段、点击素材插入正文，或导入在外部写好的 Markdown。'
+          : '可以直接在纸面写下第一段，也可以导入写好的 Markdown 文件，或在左侧通过对话起草。'}
+      </p>
+      <div className="ws-blank-draft-actions">
+        <button type="button" className="ws-btn is-primary" disabled={busy} onClick={() => setComposing(true)}>
+          开始写第一段
+        </button>
+        <button
+          type="button"
+          className="ws-btn"
+          disabled={busy || Boolean(reimportReason)}
+          title={reimportReason || undefined}
+          onClick={() => setState({ dialog: 'reimport', reimportArticleId: article.id })}
+        >
+          <Icon name="upload" size={14} />导入 Markdown
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function Paper({ article, reviewTarget, reviewPulse }) {
   const editing = useStudio(s => s.editing)
   const job = article.job
@@ -880,7 +989,20 @@ function Paper({ article, reviewTarget, reviewPulse }) {
     )
   }
   if (!article.blocks.length) {
-    return <div className="ws-sheet-wrap"><div className="ws-row"><div className="ws-sheet is-first is-last"><p className="ws-muted">这篇文章还没有正文。在左边说一句想写什么，或者新建一篇把写好的文章贴进来。</p></div><div className="ws-margin" /></div></div>
+    return (
+      <div className="ws-sheet-wrap is-neo">
+        <div className="ws-row">
+          <div className="ws-sheet is-first"><PaperTitle key={article.id} article={article} busy={Boolean(job || pending)} /></div>
+          <div className="ws-margin" />
+        </div>
+        <div className="ws-row">
+          <div className="ws-sheet is-last">
+            <BlankDraftCard article={article} busy={Boolean(job || pending)} />
+          </div>
+          <div className="ws-margin" />
+        </div>
+      </div>
+    )
   }
   let sectionNumber = 0
   return (
@@ -1518,7 +1640,7 @@ function openArticleView(article, view) {
   void rememberArticleView(article.id, view)
 }
 
-function ArticleInfoPane({ article }) {
+function ArticleInfoPane({ article, cloudinaryReady }) {
   const busy = Boolean(article.job)
   const generating = article.job?.kind === 'titles'
   const [showTitles, setShowTitles] = React.useState(false)
@@ -1532,38 +1654,41 @@ function ArticleInfoPane({ article }) {
     }
     setState({ dialog: 'reimport', reimportArticleId: article.id })
   }
-  return <section className="ws-sec">
-    <div className="ws-sec-head">
-      <h2 className="ws-pane-title">当前标题</h2>
-      {article.title ? <button type="button" className="ws-link" aria-expanded={showTitles} onClick={() => setShowTitles(open => !open)}>
-        {showTitles ? '收起候选' : '换标题'}
-      </button> : null}
-    </div>
-    <p className="ws-side-title">{article.title || '还没有标题'}</p>
-    {article.summary ? <p className="ws-summary"><span>摘要</span>{article.summary}</p> : null}
-    {showTitles || !article.title ? <div className="ws-sec ws-side-candidates">
+  return <>
+    <SourceBagCard article={article} cloudinaryReady={cloudinaryReady} />
+    <section className="ws-sec">
       <div className="ws-sec-head">
-        <h3 className="ws-pane-title">标题候选</h3>
-        <button type="button" className="ws-link" disabled={busy || !article.blocks.length} onClick={() => act('titles/regen')}>
-          {article.titles.length ? '重新出' : '出标题'}
-        </button>
+        <h2 className="ws-pane-title">当前标题</h2>
+        {article.title ? <button type="button" className="ws-link" aria-expanded={showTitles} onClick={() => setShowTitles(open => !open)}>
+          {showTitles ? '收起候选' : '换标题'}
+        </button> : null}
       </div>
-      {generating ? <p className="ws-shimmer">正在出标题…</p> : null}
-      {article.titles.map(item => (
-        <button type="button" key={item.text} className={`ws-choice ws-title-choice ${item.recommended ? 'is-recommended' : ''} ${item.text === article.title ? 'is-on' : ''}`}
-          aria-pressed={item.text === article.title} disabled={busy} onClick={async () => { if (await act('title/pick', { text: item.text })) setShowTitles(false) }}>
-          {item.recommended ? <span className="ws-title-recommendation"><Icon name="spark" size={13} />主推</span> : null}
-          <span>{item.text}</span>
-          {item.recommended && item.reason ? <small>{item.reason}</small> : null}
-        </button>
-      ))}
-    </div> : null}
-    <details className="ws-manual">
-      <summary>更多操作</summary>
-      <button type="button" className="ws-btn" disabled={!article.blocks.length} onClick={copyMarkdown}>复制 Markdown</button>
-      <button type="button" className="ws-btn" disabled={!article.blocks.length || Boolean(reimportReason)} title={reimportReason || undefined} onClick={openReimport}>重新导入 Markdown</button>
-    </details>
-  </section>
+      <p className="ws-side-title">{article.title || '还没有标题'}</p>
+      {article.summary ? <p className="ws-summary"><span>摘要</span>{article.summary}</p> : null}
+      {showTitles || !article.title ? <div className="ws-sec ws-side-candidates">
+        <div className="ws-sec-head">
+          <h3 className="ws-pane-title">标题候选</h3>
+          <button type="button" className="ws-link" disabled={busy || !article.blocks.length} onClick={() => act('titles/regen')}>
+            {article.titles.length ? '重新出' : '出标题'}
+          </button>
+        </div>
+        {generating ? <p className="ws-shimmer">正在出标题…</p> : null}
+        {article.titles.map(item => (
+          <button type="button" key={item.text} className={`ws-choice ws-title-choice ${item.recommended ? 'is-recommended' : ''} ${item.text === article.title ? 'is-on' : ''}`}
+            aria-pressed={item.text === article.title} disabled={busy} onClick={async () => { if (await act('title/pick', { text: item.text })) setShowTitles(false) }}>
+            {item.recommended ? <span className="ws-title-recommendation"><Icon name="spark" size={13} />主推</span> : null}
+            <span>{item.text}</span>
+            {item.recommended && item.reason ? <small>{item.reason}</small> : null}
+          </button>
+        ))}
+      </div> : null}
+      <details className="ws-manual">
+        <summary>更多操作</summary>
+        <button type="button" className="ws-btn" disabled={!article.blocks.length} onClick={copyMarkdown}>复制 Markdown</button>
+        <button type="button" className="ws-btn" disabled={Boolean(reimportReason)} title={reimportReason || undefined} onClick={openReimport}>{article.blocks.length ? '重新导入 Markdown' : '导入 Markdown'}</button>
+      </details>
+    </section>
+  </>
 }
 
 const PREFLIGHT_SEV_LABELS = { blocking: '阻断', warn: '提醒', info: '提示' }
@@ -1693,7 +1818,7 @@ function SidePane({ article, tab, onTab, tabId, flagged, retest, ready, reviewTa
     </div>
     {SIDE_TABS.map(([id]) => <div key={id} role="tabpanel" id={tabId + '-panel-' + id}
       aria-labelledby={tabId + '-' + id} className={`ws-side-content ${id === 'images' ? 'ws-images-panel' : ''}`} hidden={tab !== id} tabIndex={0}>
-      {id === 'article' ? <ArticleInfoPane article={article} /> : id === 'images' ? <>
+      {id === 'article' ? <ArticleInfoPane article={article} cloudinaryReady={cloudinaryReady} /> : id === 'images' ? <>
         <CoverPane article={article} />
         <InlineDiagramPane article={article} cloudinaryReady={cloudinaryReady} onReviewJump={onReviewJump} unsavedCount={unsavedCount} />
         <SvgCardsPane article={article} reviewTarget={reviewTarget} unsavedCount={unsavedCount} onReviewJump={onReviewJump} />
@@ -1871,6 +1996,7 @@ function ReimportDialog({ article }) {
   const readingRef = React.useRef(false)
   const [error, setError] = React.useState('')
   const sequence = React.useRef(0)
+  const isBlank = article.blocks.length === 0
   const taskReason = article.publishedAt ? '已发布稿件不能覆盖正文。'
     : article.job || article.coverJob || article.inlineDiagramJob || article.imageImport?.total
       ? '请等当前任务完成后再重新导入。' : ''
@@ -1949,12 +2075,13 @@ function ReimportDialog({ article }) {
       if (requestId !== sequence.current) return
       const editing = getState().editing
       const keepEditing = editing && result.current?.blocks.some(block => block.id === editing)
+      const nextView = isBlank ? 'paper' : 'layout'
       setState({
         dialog: null, reimportArticleId: null, module: 'paper', paperHome: false,
-        view: 'layout', layout: null, svgCardCandidate: null,
+        view: nextView, layout: null, svgCardCandidate: null,
         editing: keepEditing ? editing : null, paperSession: Date.now(),
       })
-      void rememberArticleView(article.id, 'layout')
+      void rememberArticleView(article.id, nextView)
     } catch (err) {
       if (requestId !== sequence.current) return
       if (err.status === 409) {
@@ -1968,11 +2095,11 @@ function ReimportDialog({ article }) {
   }
   return (
     <div className={`ws-scrim${closing ? ' is-closing' : ''}`} onMouseDown={event => { if (event.target === event.currentTarget) close() }}>
-      <form className="ws-dialog ws-import-dialog ws-reimport-dialog" role="dialog" aria-modal="true" aria-label="重新导入 Markdown" onSubmit={submit}>
+      <form className="ws-dialog ws-import-dialog ws-reimport-dialog" role="dialog" aria-modal="true" aria-label={isBlank ? '导入 Markdown' : '重新导入 Markdown'} onSubmit={submit}>
         <div className="ws-dialog-head">
           <div>
-            <h2 className="ws-dialog-title">重新导入 Markdown</h2>
-            <p className="ws-muted ws-small">覆盖到「{article.title || '未命名文章'}」</p>
+            <h2 className="ws-dialog-title">{isBlank ? '导入 Markdown' : '重新导入 Markdown'}</h2>
+            <p className="ws-muted ws-small">{isBlank ? `导入到「${article.title || '未命名文章'}」` : `覆盖到「${article.title || '未命名文章'}」`}</p>
           </div>
           <button type="button" className="ws-icon-btn" aria-label="关闭" disabled={Boolean(busy)} onClick={close}><Icon name="close" /></button>
         </div>
@@ -2015,7 +2142,7 @@ function ReimportDialog({ article }) {
         <div className="ws-dialog-foot">
           <button type="button" className="ws-btn" disabled={Boolean(busy)} onClick={close}>取消</button>
           <button type="submit" className="ws-btn is-primary" disabled={locked || !markdown.trim() || Boolean(plan && (!plan.changed || (plan.removedMedia.length && !acknowledgeRemovedMedia)))}>
-            {busy === 'preview' ? '正在预检…' : busy === 'submit' ? '正在覆盖…' : plan ? '确认覆盖' : '查看覆盖影响'}
+            {busy === 'preview' ? '正在预检…' : busy === 'submit' ? (isBlank ? '正在导入…' : '正在覆盖…') : plan ? (isBlank ? '确认导入' : '确认覆盖') : (isBlank ? '预览并导入' : '查看覆盖影响')}
           </button>
         </div>
       </form>
@@ -2416,7 +2543,7 @@ function Empty({ model }) {
 }
 
 const MODULES = [
-  { id: 'materials', label: '素材', icon: 'materials', soon: true, title: '素材', lead: '把零散的灵感、链接、聊天记录先放这里，攒够了挑几条一起成稿。', points: ['一句话、一个链接、一段聊天记录，贴进来就是一张卡片', '挑几张卡片一起成稿，稿子会记住用了哪些素材', '素材里出现过的事实和原话，写稿时优先用'] },
+  { id: 'prep', label: '备稿', icon: 'materials' },
   { id: 'paper', label: '稿面', icon: 'doc' },
   { id: 'schedule', label: '排期', icon: 'schedule' },
   { id: 'insights', label: '复盘', icon: 'insights', title: '复盘', lead: '导入公众号后台导出的数据，看哪种写法读的人更多。', points: ['单篇阅读、账号每日趋势按篇对比', '成稿时记下的标题套路、横幅和皮肤，可以拿来比较', '从数据里提炼出的规则，确认后写进写作 skill'] },
@@ -2439,10 +2566,11 @@ const SKILL_INFO = {
 function Rail({ module }) {
   const update = useStudio(s => s.update)
   const { containerRef, hasThumb, thumbProps } = useSlidingIndicator(module, { selector: 'button.is-on' })
+  const isMac = typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod|darwin/i.test(String(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || ''))
   return (
     <nav ref={containerRef} className={`ws-rail ws-seg-host${hasThumb ? ' has-thumb' : ''}`} aria-label="模块">
       <span {...thumbProps} className={`${thumbProps.className} ws-rail-thumb`} />
-      {MODULES.filter(item => item.id !== 'materials').map(item => (
+      {MODULES.map(item => (
         <button type="button" key={item.id} className={module === item.id ? 'is-on' : ''} aria-current={module === item.id ? 'page' : undefined} onClick={() => setState({ module: item.id, ...(item.id === 'paper' ? { paperHome: true } : {}) })}>
           <Icon name={item.icon} size={20} />
           <span>{item.label}</span>
@@ -2450,6 +2578,16 @@ function Rail({ module }) {
         </button>
       ))}
       <span className="ws-grow" />
+      <button
+        type="button"
+        className="ws-rail-quick"
+        title={isMac ? '随手记灵感（⌘J 或 Alt+Shift+J）' : '随手记灵感（Alt+Shift+J）'}
+        aria-label="随手记灵感"
+        onClick={() => setQuickCaptureOpen(true)}
+      >
+        <Icon name="quickNote" size={18} />
+        <span>速记</span>
+      </button>
       <button type="button" title={update ? `发现新版本 v${update.latest}` : '设置'} onClick={() => setState({ dialog: 'settings' })}>
         <Icon name="gear" size={20} /><span>设置</span>{update ? <i className="ws-update-dot" aria-hidden="true" /> : null}
       </button>
@@ -2977,8 +3115,17 @@ export function Studio({ onOpenPlugin }) {
   const paperSession = useStudio(s => s.paperSession)
   const note = useStudio(s => s.toast)
   const { mounted: toastMounted, closing: toastClosing, value: toastItem } = usePresenceValue(note)
-  const item = MODULES.find(m => m.id === module) ?? MODULES[1]
+  const item = MODULES.find(m => m.id === module) ?? MODULES.find(m => m.id === 'paper') ?? MODULES[0]
   React.useEffect(() => { loadVersion() }, [])
+  React.useEffect(() => {
+    const onKeyDown = event => {
+      if (!isQuickCaptureShortcut(event)) return
+      event.preventDefault()
+      setQuickCaptureOpen(!getState().quickCaptureOpen)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
   React.useEffect(() => {
     if (dialog === 'reimport' && data?.current?.id !== reimportArticleId) {
       setState({ dialog: null, reimportArticleId: null })
@@ -2987,6 +3134,7 @@ export function Studio({ onOpenPlugin }) {
   let content
   let surfaceKey = item.id
   if (!data) { content = <div className="ws-center">{error ? <p className="ws-muted">加载失败：{error}</p> : <span className="ws-shimmer">正在打开稿面…</span>}</div>; surfaceKey = 'loading' }
+  else if (item.id === 'prep') content = <PrepView data={data} />
   else if (item.id === 'paper') {
     content = paperHome ? <DraftHome data={data} /> : <PaperModule key={`${data.current?.id ?? 'empty'}:${paperSession ?? 0}`} data={data} />
     surfaceKey = paperHome ? 'paper-home' : `paper-doc:${data.current?.id ?? 'empty'}`
@@ -3011,6 +3159,7 @@ export function Studio({ onOpenPlugin }) {
       {videoCardModal ? <VideoCardInsert {...videoCardModal} Icon={Icon} /> : null}
       {dialog === 'settings' ? <SettingsDialog onOpenPlugin={onOpenPlugin} /> : null}
       {dialog === 'model' ? <ModelDialog /> : null}
+      <QuickCaptureModal />
       {toastMounted && toastItem ? (
         <div key={toastItem.at} className={`ws-toast ${toastItem.error ? 'is-error' : ''}${toastClosing ? ' is-closing' : ''}`} role="status">
           {toastItem.text}

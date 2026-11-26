@@ -59,6 +59,28 @@ export async function uploadInlineImage(image, config, { articleId, assetId }, f
   return result
 }
 
+/**
+ * 按文件头魔数识别图片格式（PNG / JPEG / GIF / WebP），不信任扩展名或 MIME。
+ * @param {Buffer} image - 原始图片字节。
+ * @returns {{ ext: 'png'|'jpg'|'gif'|'webp', mimeType: string } | null} 识别结果。
+ */
+export function detectImageFormat(image) {
+  if (!Buffer.isBuffer(image)) return null
+  if (image.length >= 8 && image.toString('hex', 0, 8) === '89504e470d0a1a0a') {
+    return { ext: 'png', mimeType: 'image/png' }
+  }
+  if (image.length >= 3 && image.toString('hex', 0, 3) === 'ffd8ff') {
+    return { ext: 'jpg', mimeType: 'image/jpeg' }
+  }
+  if (image.length >= 6 && ['GIF87a', 'GIF89a'].includes(image.toString('ascii', 0, 6))) {
+    return { ext: 'gif', mimeType: 'image/gif' }
+  }
+  if (image.length >= 12 && image.toString('ascii', 0, 4) === 'RIFF' && image.toString('ascii', 8, 12) === 'WEBP') {
+    return { ext: 'webp', mimeType: 'image/webp' }
+  }
+  return null
+}
+
 export async function uploadLocalImage(image, config, fetchImpl = fetch) {
   if (!config?.cloudName || !config.apiKey || !config.apiSecret) {
     throw fail('请先在设置中配置 Cloudinary，再上传本地图片。', 400)
@@ -66,13 +88,9 @@ export async function uploadLocalImage(image, config, fetchImpl = fetch) {
   if (!Buffer.isBuffer(image) || image.length > MAX_LOCAL_IMAGE) {
     throw fail('本地图片不能超过 10 MB。', 400)
   }
-  const format = image.toString('hex', 0, 8) === '89504e470d0a1a0a' ? ['png', 'image/png']
-    : image.toString('hex', 0, 3) === 'ffd8ff' ? ['jpg', 'image/jpeg']
-      : ['GIF87a', 'GIF89a'].includes(image.toString('ascii', 0, 6)) ? ['gif', 'image/gif']
-        : image.length >= 12 && image.toString('ascii', 0, 4) === 'RIFF' && image.toString('ascii', 8, 12) === 'WEBP' ? ['webp', 'image/webp']
-          : null
+  const format = detectImageFormat(image)
   if (!format) throw fail('请选择 PNG、JPEG、GIF 或 WebP 图片。', 400)
-  const [extension, type] = format
+  const { ext: extension, mimeType: type } = format
   const { cloudName, apiKey, apiSecret } = config
   const timestamp = String(Math.floor(Date.now() / 1000))
   const publicId = `dsh-wechat-studio/local-${createHash('sha256').update(image).digest('hex')}`

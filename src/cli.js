@@ -17,6 +17,17 @@ import { MARKDOWN_TARGETS, THREAD_VARIANTS, threadClipboardText, xhsClipboardTex
 import { buildInsights, importData, INSIGHTS_EMPTY } from './insights.js'
 import { checkBanner, detectionText, renderLayout, renderSvgCard, renderWechatHtml, resolveLayoutPreferences, STYLES, SVG_CARD_KINDS, THEMES } from './layout.js'
 import { MAX_WECHAT_TITLE, runPreflight } from './preflight.js'
+import {
+  addBag,
+  addNote,
+  formatBriefMarkdown,
+  PREP_EMPTY,
+  promoteBag,
+  reconcilePrep,
+  resolveSponsoredBrief,
+  savePrepAsset,
+  transferPromotedArticleImages,
+} from './prep.js'
 import { publicSettings, readSettings, updateSettings } from './settings.js'
 import { dshHome, JsonStore, Store } from './store.js'
 import { pushWechatDraft, verifyCredentials } from './wechat.js'
@@ -57,6 +68,7 @@ const VALUE_FLAGS = new Set([
   '--zhuque-key', '--zhuque-endpoint', '--ark-key', '--bailian-key', '--minimax-key', '--gemini-key', '--gemini-base-url', '--openai-key', '--openai-base-url',
   '--mp-name', '--mp-app-id', '--mp-app-secret', '--from-json', '--preflight-words',
   '--app-id', '--app-secret', '--cover', '--avatar', '--target', '--variant',
+  '--bag', '--article', '--image', '--partner', '--date', '--selling-points', '--must-include', '--taboo', '--markdown',
 ])
 
 const HELP_TEXT = `wechat-studio v${VERSION} — 微信公众号成稿台 CLI（兼容 DeepSeek Harness 插件工作区）
@@ -65,6 +77,7 @@ const HELP_TEXT = `wechat-studio v${VERSION} — 微信公众号成稿台 CLI（
   wechat-studio <command> [options]
 
 子命令:
+  prep <list|note|bag>           管理备稿纸条、选题袋/商单袋与外部 Markdown 原地成稿
   check <file.md|->              零成本发布防踩坑体检（媒体/占位/标题/商单外链/文字墙/合规词）
   layout <file.md|->             将 Markdown 排成公众号 HTML 页面
   svg-card <kind>                渲染单张公众号 SMIL 动画 SVG 卡片
@@ -182,9 +195,11 @@ const SUB_HELP = {
   --from-json <file|->                 从 JSON 文件或 stdin 批量读取配置补丁（适合传密钥）`,
 
   check: `用法: wechat-studio check <file.md|-> [options]
-说明: 零模型成本、确定性的发布防踩坑体检（外链/文字墙/合规词仅提醒，绝不阻断发布）。
+说明: 零模型成本、确定性的发布防踩坑体检（外链/文字墙/合规词/商单约束仅提醒，绝不阻断发布）。
 选项:
   --title <text>                       覆盖待检查的标题（默认取 Markdown 一级标题）
+  --bag <bagId>                        载入指定商单袋的必带信息与禁忌红线参与体检（与 --article 互斥）
+  --article <articleId>                载入指定稿件关联的商单约束参与体检（与 --bag 互斥）
   --fail-on-blocking                   存在阻断项（媒体/占位/空标题/超 64 字标题）时以退出码 1 结束
   --data-dir <path>                    指定工作区目录（读取 fixedLines 与 preflightWords）
   --json                               输出单行结构化 JSON`,
@@ -202,9 +217,24 @@ push 选项:
   --follow-card                        包含文末关注卡
   --avatar <https://...>               关注卡/横幅头像地址（留空使用首字徽章）
   --cover <file.png|jpg>               本地封面图（留空自动上传纯色占位图并提示）
+  --bag <bagId>                        载入指定商单袋的商单约束参与推送前体检（与 --article 互斥）
+  --article <articleId>                载入指定稿件关联的商单约束参与推送前体检（与 --bag 互斥）
   --app-id <id> / --app-secret <sec>   临时覆盖公众号凭证（也支持环境变量 WECHAT_APP_ID / WECHAT_APP_SECRET）
   --dry-run                            仅在本地完成排版与完整体检，不调用微信接口
   --force                              忽略阻断级预检问题（本地图/飞书图/占位/标题超长等）强制推送`,
+
+  prep: `用法:
+  wechat-studio prep list [--bags] [--notes] [--sponsored] [--json]
+  wechat-studio prep note <text|-> [--bag <bagId>] [--image <path>] [--json]
+  wechat-studio prep bag create <title> [--sponsored] [--partner <name>] [--date YYYY-MM-DD]
+                        [--selling-points <text>] [--must-include <csv>] [--taboo <csv>] [--json]
+  wechat-studio prep bag export <bagId> [--out <file>] [--json]
+  wechat-studio prep bag promote <bagId> --markdown <file|-> [--operation-id <id>] [--json]
+说明:
+  管理「备稿」模块的纸条与选题袋/商单袋，与 DSH 插件实时共享 prep.json 和 prep-assets/。
+全局选项:
+  --data-dir <path>                    指定工作区目录
+  --json                               输出单行结构化 JSON`,
 
   derive: `用法:
   wechat-studio derive markdown <articleId> [--target zhihu|juejin|blog] [--out <file.md>]
@@ -994,16 +1024,21 @@ async function handleDraft(argv, io, secrets) {
       'follow-card': { type: 'boolean', default: false },
       avatar: { type: 'string' },
       cover: { type: 'string' },
+      bag: { type: 'string' },
+      article: { type: 'string' },
       'app-id': { type: 'string' },
       'app-secret': { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
       force: { type: 'boolean', default: false },
     })
     if (values.help) return emitSuccess(io, values.json, { help: SUB_HELP.draft }, SUB_HELP.draft)
-    const usage = '用法：wechat-studio draft push <file.md|-> [--title <标题>] [--style <id>] [--theme <id>] [--banner <spec.json>] [--follow-card] [--cover <file>] [--dry-run] [--force]'
+    const usage = '用法：wechat-studio draft push <file.md|-> [--title <标题>] [--style <id>] [--theme <id>] [--banner <spec.json>] [--follow-card] [--cover <file>] [--bag <bagId> | --article <articleId>] [--dry-run] [--force]'
     assertPositionals(positionals, 1, usage)
     const file = positionals[0]
     if (!file) throw new UsageError(usage)
+    if (values.bag !== undefined && values.article !== undefined) {
+      throw new UsageError('--bag 和 --article 不能同时使用，请只指定其中一项。')
+    }
     if (values.style && !STYLES.includes(values.style)) {
       throw new UsageError(`不支持的排版风格：${values.style}（可选：${STYLES.join(', ')}）`)
     }
@@ -1017,10 +1052,11 @@ async function handleDraft(argv, io, secrets) {
       throw new UsageError('--avatar 必须是 https:// 图片地址。')
     }
     const dataDir = resolveDataDir(values, io.env)
-    const [markdown, settings, bannerSpec] = await Promise.all([
+    const [markdown, settings, bannerSpec, sponsoredBrief] = await Promise.all([
       readTextFile(file, 'Markdown 文件', io),
       readSettings(dataDir),
       values.banner ? readJsonFile(values.banner, '横幅规格 JSON', io) : Promise.resolve(null),
+      resolveSponsoredBriefOption(dataDir, values),
     ])
     if (!markdown.trim()) throw new UsageError('Markdown 文件为空。')
     if (bannerSpec !== null) {
@@ -1062,7 +1098,7 @@ async function handleDraft(argv, io, secrets) {
       : (rendered.title || '未命名')
     const preflight = runPreflight(
       { title, markdown },
-      { fixedLines: settings.fixedLines, customWords: settings.preflightWords, layoutIssues: rendered.issues, titleTarget: 'draft' },
+      { fixedLines: settings.fixedLines, customWords: settings.preflightWords, sponsoredBrief, layoutIssues: rendered.issues, titleTarget: 'draft' },
     )
     const blockingItems = preflight.items.filter(item => item.severity === 'blocking')
     const blockingMessages = blockingItems.map(item => item.title)
@@ -1147,27 +1183,78 @@ function formatPreflightText(preflight) {
   return lines.join('\n')
 }
 
+function openPrepStore(dataDir) {
+  return new JsonStore(dataDir, { file: 'prep.json', empty: PREP_EMPTY })
+}
+
+async function resolveSponsoredBriefOption(dataDir, values) {
+  if (values.bag !== undefined && values.article !== undefined) {
+    throw new UsageError('--bag 和 --article 不能同时使用，请只指定其中一项。')
+  }
+  if (values.bag !== undefined) {
+    const bagId = values.bag.trim()
+    if (!bagId) throw new UsageError('--bag 不能为空。')
+    const prepState = await openPrepStore(dataDir).read()
+    const bag = (prepState.bags ?? []).find(b => b.id === bagId)
+    if (!bag) throw Object.assign(new Error(`找不到选题袋：${bagId}`), { status: 404 })
+    return resolveSponsoredBrief({ sourceBagId: bag.id }, prepState)
+  }
+  if (values.article !== undefined) {
+    const articleId = values.article.trim()
+    if (!articleId) throw new UsageError('--article 不能为空。')
+    const [articleState, prepState] = await Promise.all([
+      new Store(dataDir).read(),
+      openPrepStore(dataDir).read(),
+    ])
+    const article = (articleState.articles ?? []).find(a => a.id === articleId)
+    if (!article) throw Object.assign(new Error(`找不到稿件：${articleId}`), { status: 404 })
+    return resolveSponsoredBrief(article, prepState)
+  }
+  return null
+}
+
+function sortActiveBags(bags) {
+  return bags.slice().sort((a, b) => {
+    const typeDiff = Number(b.type === 'sponsored') - Number(a.type === 'sponsored')
+    if (typeDiff !== 0) return typeDiff
+    if (a.type === 'sponsored' && b.type === 'sponsored') {
+      if (a.targetDate && b.targetDate && a.targetDate !== b.targetDate) {
+        return a.targetDate.localeCompare(b.targetDate)
+      }
+      if (a.targetDate && !b.targetDate) return -1
+      if (!a.targetDate && b.targetDate) return 1
+    }
+    return String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? ''))
+  })
+}
+
 async function handleCheck(argv, io) {
   const { values, positionals } = parseSubcommandArgs(argv, {
     title: { type: 'string' },
+    bag: { type: 'string' },
+    article: { type: 'string' },
     'fail-on-blocking': { type: 'boolean', default: false },
   })
   if (values.help) return emitSuccess(io, values.json, { help: SUB_HELP.check }, SUB_HELP.check)
-  const usage = '用法：wechat-studio check <file.md|-> [--title <标题>] [--fail-on-blocking] [--data-dir <path>] [--json]'
+  const usage = '用法：wechat-studio check <file.md|-> [--title <标题>] [--bag <bagId> | --article <articleId>] [--fail-on-blocking] [--data-dir <path>] [--json]'
   assertPositionals(positionals, 1, usage)
   const file = positionals[0]
   if (!file) throw new UsageError(usage)
+  if (values.bag !== undefined && values.article !== undefined) {
+    throw new UsageError('--bag 和 --article 不能同时使用，请只指定其中一项。')
+  }
   const dataDir = resolveDataDir(values, io.env)
-  const [markdown, settings] = await Promise.all([
+  const [markdown, settings, sponsoredBrief] = await Promise.all([
     readTextFile(file, 'Markdown 文件', io),
     readSettings(dataDir),
+    resolveSponsoredBriefOption(dataDir, values),
   ])
   if (!markdown.trim()) throw new UsageError('Markdown 文件为空。')
   const parsed = splitMarkdown(markdown)
   const title = values.title !== undefined ? values.title.trim() : parsed.title
   const preflight = runPreflight(
     { title, markdown },
-    { fixedLines: settings.fixedLines, customWords: settings.preflightWords },
+    { fixedLines: settings.fixedLines, customWords: settings.preflightWords, sponsoredBrief },
   )
   const human = formatPreflightText(preflight)
   if (values['fail-on-blocking'] && !preflight.ok) {
@@ -1284,6 +1371,255 @@ async function handleDerive(argv, io, secrets) {
   throw new UsageError(`未知的 derive 子命令：${action}（支持 markdown、thread、xhs）`)
 }
 
+async function handlePrep(argv, io, secrets) {
+  const { action, rest } = splitSubAction(argv)
+  if (!action) {
+    const { values } = parseSubcommandArgs(rest)
+    return emitSuccess(io, values.json, { help: SUB_HELP.prep }, SUB_HELP.prep)
+  }
+
+  if (action === 'list') {
+    const { values, positionals } = parseSubcommandArgs(rest, {
+      bags: { type: 'boolean', default: false },
+      notes: { type: 'boolean', default: false },
+      sponsored: { type: 'boolean', default: false },
+    })
+    if (values.help) return emitSuccess(io, values.json, { help: SUB_HELP.prep }, SUB_HELP.prep)
+    assertPositionals(positionals, 0, '用法：wechat-studio prep list [--bags] [--notes] [--sponsored]')
+    const dataDir = resolveDataDir(values, io.env)
+    const prepStore = openPrepStore(dataDir)
+    const store = new Store(dataDir)
+    await reconcilePrep(prepStore, store)
+    const state = await prepStore.read()
+    const allNotes = state.notes ?? []
+    const noteCountByBag = new Map()
+    for (const note of allNotes) {
+      if (note.bagId) noteCountByBag.set(note.bagId, (noteCountByBag.get(note.bagId) ?? 0) + 1)
+    }
+
+    const showBags = values.bags || values.sponsored || !values.notes
+    const showNotes = values.notes || (!values.bags && !values.sponsored)
+
+    const bags = showBags
+      ? sortActiveBags((state.bags ?? []).filter(b => !b.archivedAt && !b.articleId && (!values.sponsored || b.type === 'sponsored')))
+        .map(b => ({ ...b, noteCount: noteCountByBag.get(b.id) ?? 0 }))
+      : []
+    const notes = showNotes
+      ? allNotes.filter(n => n.bagId == null).slice().sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))
+      : []
+
+    const lines = []
+    if (bags.length) {
+      lines.push('选题袋：')
+      for (const b of bags) {
+        const tag = b.type === 'sponsored' ? `[商单${b.brief?.partner ? `·${b.brief.partner}` : ''}]` : '[选题]'
+        const datePart = b.targetDate ? `\t${b.targetDate}` : ''
+        lines.push(`${b.id}\t${tag}${datePart}\t${b.title}（${b.noteCount} 条）`)
+      }
+    }
+    if (notes.length) {
+      if (lines.length) lines.push('')
+      lines.push('自由纸条：')
+      for (const n of notes) {
+        const preview = (n.text || n.image?.name || '[截图]').replace(/\s+/g, ' ').slice(0, 60)
+        lines.push(`${n.id}\t[${n.kind}]\t${preview}`)
+      }
+    }
+    const human = lines.length ? lines.join('\n') : '当前没有活跃选题袋或自由纸条。'
+    return emitSuccess(io, values.json, { bags, notes }, human)
+  }
+
+  if (action === 'note') {
+    const { values, positionals } = parseSubcommandArgs(rest, {
+      bag: { type: 'string' },
+      image: { type: 'string' },
+    })
+    if (values.help) return emitSuccess(io, values.json, { help: SUB_HELP.prep }, SUB_HELP.prep)
+    const usage = '用法：wechat-studio prep note <text|-> [--bag <bagId>] [--image <path>]'
+    assertPositionals(positionals, 1, usage)
+    const rawArg = positionals[0]
+    let text = ''
+    if (rawArg === '-') {
+      text = await readStdin(io)
+    } else if (rawArg !== undefined) {
+      text = rawArg
+    }
+    if (!text.trim() && !values.image) throw new UsageError(usage)
+
+    const dataDir = resolveDataDir(values, io.env)
+    let image = null
+    if (values.image) {
+      let buffer
+      try {
+        buffer = await readFile(values.image)
+      } catch (err) {
+        if (err.code === 'ENOENT') throw new UsageError(`找不到图片文件：${values.image}`)
+        throw err
+      }
+      try {
+        image = await savePrepAsset(dataDir, buffer, basename(values.image))
+      } catch (err) {
+        if (err?.status === 400) throw new UsageError(err.message)
+        throw err
+      }
+    }
+
+    const prepStore = openPrepStore(dataDir)
+    const store = new Store(dataDir)
+    await reconcilePrep(prepStore, store)
+    let note
+    try {
+      note = await prepStore.update(state => addNote(state, {
+        text,
+        bagId: values.bag ?? null,
+        image,
+      }))
+    } catch (err) {
+      if (err?.status === 400) throw new UsageError(err.message)
+      throw err
+    }
+    const targetLabel = note.bagId ? `（已归入 ${note.bagId}）` : '（自由纸条）'
+    return emitSuccess(io, values.json, { note }, `已记下纸条：${note.id}${targetLabel}`)
+  }
+
+  if (action === 'bag') {
+    const { action: bagAction, rest: bagRest } = splitSubAction(rest)
+    if (!bagAction) {
+      const { values } = parseSubcommandArgs(bagRest)
+      return emitSuccess(io, values.json, { help: SUB_HELP.prep }, SUB_HELP.prep)
+    }
+
+    if (bagAction === 'create') {
+      const { values, positionals } = parseSubcommandArgs(bagRest, {
+        sponsored: { type: 'boolean', default: false },
+        partner: { type: 'string' },
+        date: { type: 'string' },
+        'selling-points': { type: 'string' },
+        'must-include': { type: 'string' },
+        taboo: { type: 'string' },
+      })
+      if (values.help) return emitSuccess(io, values.json, { help: SUB_HELP.prep }, SUB_HELP.prep)
+      const usage = '用法：wechat-studio prep bag create <title> [--sponsored] [--partner <name>] [--date YYYY-MM-DD] [--selling-points <text>] [--must-include <csv>] [--taboo <csv>]'
+      assertPositionals(positionals, 1, usage)
+      const title = positionals[0]
+      if (!title || !title.trim()) throw new UsageError(usage)
+
+      const dataDir = resolveDataDir(values, io.env)
+      const prepStore = openPrepStore(dataDir)
+      const store = new Store(dataDir)
+      await reconcilePrep(prepStore, store)
+      let bag
+      try {
+        bag = await prepStore.update(state => addBag(state, {
+          title,
+          type: values.sponsored ? 'sponsored' : 'topic',
+          targetDate: values.date ?? null,
+          brief: {
+            partner: values.partner ?? '',
+            sellingPoints: values['selling-points'] ?? '',
+            mustInclude: values['must-include'] ?? '',
+            taboo: values.taboo ?? '',
+          },
+        }))
+      } catch (err) {
+        if (err?.status === 400) throw new UsageError(err.message)
+        throw err
+      }
+      const typeLabel = bag.type === 'sponsored' ? '商单袋' : '选题袋'
+      const dateLabel = bag.targetDate ? `，目标日期 ${bag.targetDate}` : ''
+      return emitSuccess(io, values.json, { bag }, `已创建${typeLabel}：${bag.id}（${bag.title}${dateLabel}）`)
+    }
+
+    if (bagAction === 'export') {
+      const { values, positionals } = parseSubcommandArgs(bagRest, {
+        out: { type: 'string' },
+      })
+      if (values.help) return emitSuccess(io, values.json, { help: SUB_HELP.prep }, SUB_HELP.prep)
+      const usage = '用法：wechat-studio prep bag export <bagId> [--out <file>]'
+      assertPositionals(positionals, 1, usage)
+      const bagId = positionals[0]
+      if (!bagId) throw new UsageError(usage)
+
+      const dataDir = resolveDataDir(values, io.env)
+      const prepState = await openPrepStore(dataDir).read()
+      const bag = (prepState.bags ?? []).find(b => b.id === bagId)
+      if (!bag) throw Object.assign(new Error(`找不到选题袋：${bagId}`), { status: 404 })
+      const bagNotes = (prepState.notes ?? []).filter(n => n.bagId === bagId)
+      const markdown = formatBriefMarkdown(bag, bagNotes, { root: dataDir })
+      if (values.out) await writeOutFile(values.out, markdown)
+      return emitSuccess(
+        io,
+        values.json,
+        { bagId: bag.id, title: bag.title, out: values.out ?? null, markdown },
+        values.out ? `已导出备料单：${values.out}` : markdown.replace(/\n$/, ''),
+      )
+    }
+
+    if (bagAction === 'promote') {
+      const { values, positionals } = parseSubcommandArgs(bagRest, {
+        markdown: { type: 'string' },
+        'operation-id': { type: 'string' },
+      })
+      if (values.help) return emitSuccess(io, values.json, { help: SUB_HELP.prep }, SUB_HELP.prep)
+      const usage = '用法：wechat-studio prep bag promote <bagId> --markdown <file|-> [--operation-id <id>]'
+      assertPositionals(positionals, 1, usage)
+      const bagId = positionals[0]
+      if (!bagId || !values.markdown) throw new UsageError(usage)
+
+      const markdown = await readTextFile(values.markdown, 'Markdown 文件', io)
+      if (!markdown.trim()) throw new UsageError('Markdown 文件为空。')
+
+      const dataDir = resolveDataDir(values, io.env)
+      const prepStore = openPrepStore(dataDir)
+      const store = new Store(dataDir)
+      await reconcilePrep(prepStore, store)
+
+      let promoted
+      try {
+        promoted = await promoteBag({
+          prepStore,
+          store,
+          bagId,
+          mode: 'import',
+          markdown,
+          operationId: values['operation-id'],
+        })
+      } catch (err) {
+        if (err?.status === 400) throw new UsageError(err.message)
+        throw err
+      }
+
+      const settings = await readSettings(dataDir)
+      if (settings.cloudinary?.apiSecret) secrets.push(settings.cloudinary.apiSecret)
+      const imageTransfer = await transferPromotedArticleImages({
+        store,
+        prepStore,
+        articleId: promoted.articleId,
+        feishuUrls: promoted.feishuUrls,
+        prepAssetRefs: promoted.prepAssetRefs,
+        settings,
+        fetchImpl: io.fetchImpl,
+      })
+      const warnings = [...imageTransfer.warnings]
+      const payload = {
+        articleId: promoted.articleId,
+        bagId: promoted.bagId,
+        scheduledFor: promoted.scheduledFor,
+        imageTransfer,
+        warnings,
+      }
+      const scheduleSuffix = promoted.scheduledFor ? `，已继承排期 ${promoted.scheduledFor}` : ''
+      const warnText = warnings.length ? `\n提醒：\n${warnings.map(w => `- ${w}`).join('\n')}` : ''
+      const human = `已将选题袋 ${promoted.bagId} 升格为稿件 ${promoted.articleId}${scheduleSuffix}${warnText}`
+      return emitSuccess(io, values.json, payload, human)
+    }
+
+    throw new UsageError(`未知的 prep bag 子命令：${bagAction}（支持 create、export、promote）`)
+  }
+
+  throw new UsageError(`未知的 prep 子命令：${action}（支持 list、note、bag）`)
+}
+
 export async function runCli(argv = [], rawIo = {}) {
   const io = {
     stdin: rawIo.stdin ?? process.stdin,
@@ -1307,6 +1643,7 @@ export async function runCli(argv = [], rawIo = {}) {
     const { command, index } = found
     const subArgv = [...argv.slice(0, index), ...argv.slice(index + 1)]
     switch (command) {
+      case 'prep': return await handlePrep(subArgv, io, secrets)
       case 'check': return await handleCheck(subArgv, io)
       case 'layout': return await handleLayout(subArgv, io)
       case 'svg-card': return await handleSvgCard(subArgv, io)

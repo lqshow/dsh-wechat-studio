@@ -2,7 +2,7 @@
   <br>
   <h1>公众号成稿台</h1>
   <p><strong>把已有 Markdown，做成可以发布的公众号文章。</strong></p>
-  <p>按段改稿 · 朱雀质检 · 封面与插图 · SVG 动画卡 · 排版 · 排期 · 复盘</p>
+  <p>备稿攒料 · 按段改稿 · 朱雀质检 · 封面与插图 · SVG 动画卡 · 排版 · 排期 · 复盘</p>
   <p>
     <a href="#从-markdown-到复盘">工作流</a> ·
     <a href="#快速开始">快速安装</a> ·
@@ -24,11 +24,11 @@
 
 <br>
 
-> 从一份已有 Markdown 开始。稿子、图片、排版、发布计划和真实表现，都留在同一个工作台里。
+> 从一条零散灵感或一份已有 Markdown 开始。备稿、稿子、图片、排版、发布计划和真实表现，都留在同一个工作台里。
 
 ## 从 Markdown 到复盘
 
-不是七件互不相干的小工具，而是一条连续的成稿路径：导入 `.md` / `.markdown` 稿件，按段修改并检查文字，完成封面、正文配图和排版，再安排发布、导入后台数据复盘。
+不是互不相干的小工具，而是一条连续的成稿路径：先在「备稿」随手记纸条、建选题袋/商单袋并占好排期，再升格或导入 `.md` / `.markdown` 进入稿面，按段修改并检查文字，完成封面、正文配图和排版，最后安排发布、导入后台数据复盘。
 
 <img src="docs/assets/workflow.gif" alt="导入 Markdown 稿件，按段改稿与质检，完成配图和排版，最后排期发布并复盘数据" width="100%">
 
@@ -114,6 +114,17 @@ dsh plugin --profile desktop remove dsh-wechat-studio
 
 ## 走进工作台
 
+### 00 · 备稿
+
+**动笔之前，把零散灵感、商单约束和排期占位拢在手边。**
+
+「备稿」位于左侧栏首位（`备稿 → 稿面 → 排期 → 复盘 → 技能`；插件启动默认仍进入「稿面」，不打断原有习惯）。在任意页面都可按 **`⌘J`**（macOS）或 **`Alt+Shift+J`**（Windows / Linux / macOS 备选）呼出全局速记浮窗，关闭后自动恢复原编辑焦点与选区。
+
+- **纸条 × 选题袋**：顶部速记条支持直接打字、`⌘V` 粘贴截图、拖拽图片或贴链接，并可通过下方定向投递胶囊直接归入活跃选题袋；自由纸条支持拖拽入袋、菜单归入，或多选合并为新选题袋 / 直接放上稿面。
+- **商单轻量化闭环**：普通选题与商单共用同一容器，开启「商单」后展开甲方要点卡（合作方、核心卖点、必带信息、禁忌红线）。设置目标日期后会在「排期」显示虚线占位卡；升格成稿后自动转为当日 20:00 的实心排期卡，「稿面」侧栏自动挂载只读「原备料袋」参照卡，「发布防踩坑体检」也会自动核对必带信息与禁忌红线。
+- **双轨成稿出口**：站内支持「✦ AI 带料放上稿面」或「开空白稿面（挂此袋）」；习惯在 Obsidian / 飞书 / Claude Code 等外部工具写作时，可一键「复制备料单」（确定性 Markdown），写完后直接「拖入 `.md` 原地成稿」（自动绑定原袋、继承排期，并在配置图床时自动转存飞书图与本地 `prep-assets/` 图片）。
+- **按需 AI 与 100% 离线可用**：仅三个显式按钮按需调用模型——**「✦ 贴甲方原文提炼」**（抽取甲方要点与建议日期）、**「✦ 理出可写角度」**（自由纸条 ≥ 5 条时对碎片做聚类建议）与**「✦ AI 带料放上稿面」**；其余速记、归袋、拖拽、排期占位、复制备料单、拖入 `.md` 成稿、空白稿面写作与商单体检全部 100% 本地确定性运行，离线或未配置模型也能完整使用。
+
 ### 01 · 改稿
 
 **改你指定的段落，而不是把整篇重来。**
@@ -145,7 +156,7 @@ dsh plugin --profile desktop remove dsh-wechat-studio
 
 通过 API 在线检测，或导入朱雀 PDF 报告。待处理段落会出现在纸边批注和右侧队列里，点一下就能定位；支持单段改写和批量处理，每处修改都能看差异、保留原文或恢复上一版。
 
-同页上方内置零成本的**「发布防踩坑体检」**：本地即时检查飞书临时图、本地/base64 图、未填占位与空标题/超 64 字标题等阻断项，并对 33–64 字标题（草稿箱推送超出 32 字将截断）、商单外链、手机端文字墙、视觉节奏、诱导分享/极限词以及你在「设置 → 发布体检」中配置的自定义词给出提醒（点击条目可定位到段落；风险词检查仅供人工复核，不代表微信官方审核结论）。
+同页上方内置零成本的**「发布防踩坑体检」**：本地即时检查飞书临时图、本地/base64 图、未填占位与空标题/超 64 字标题等阻断项，并对 33–64 字标题（草稿箱推送超出 32 字将截断）、商单外链、手机端文字墙、视觉节奏、诱导分享/极限词、关联商单袋的必带信息/禁忌红线，以及你在「设置 → 发布体检」中配置的自定义词给出提醒（点击条目可定位到段落；风险词检查仅供人工复核，不代表微信官方审核结论）。
 
 ### 03 · 视觉
 
@@ -245,18 +256,41 @@ npm install -g dsh-wechat-studio
 
 | 子命令 | 作用 | 常用示例 |
 | --- | --- | --- |
+| `prep` | 管理备稿纸条、选题袋/商单袋与外部 Markdown 原地成稿（`list` / `note` / `bag create\|export\|promote`） | `wechat-studio prep bag create "Cursor 2.0 实测" --sponsored --partner "Cursor" --date 2026-11-26 --json` |
 | `skills` | 查看当前生效的技能路径（个人覆盖或内置） | `wechat-studio skills --json` |
-| `check` | 零成本发布防踩坑体检（媒体/占位/超 64 字标题阻断；33–64 字标题、商单外链/文字墙/合规词仅提醒不阻断；`draft push` 仍按 32 字阻断） | `wechat-studio check article.md --json` |
+| `check` | 零成本发布防踩坑体检（媒体/占位/空标题/超 64 字标题阻断；33–64 字标题、外链/文字墙/合规词及 `--bag`/`--article` 商单约束仅提醒不阻断） | `wechat-studio check article.md --bag <bagId> --json` |
 | `layout` | 将 Markdown 排成公众号 HTML（支持横幅与关注卡） | `wechat-studio layout article.md --style neo --theme forest --banner banner.json --follow-card --out preview.html --json` |
 | `svg-card` | 渲染单张公众号 SMIL 动画 SVG 卡片 | `wechat-studio svg-card svg-steps --title "写作流程" --line "收集素材" --line "起草改稿" --out card.html --json` |
 | `detect` | 调用朱雀文本检测并定位标红段落 | `wechat-studio detect article.md --json` |
 | `cover` | 生成 2.35:1 封面（支持 `--prompt-only` / `--prompt-file` 零模型 Key 闭环） | `wechat-studio cover article.md --style felt --out cover.png --json` |
-| `draft` | 校验公众号凭证并直接推送排版稿件到草稿箱（`verify` / `push`） | `wechat-studio draft push article.md --style neo --theme forest --cover cover.png --json` |
+| `draft` | 校验公众号凭证并直接推送排版稿件到草稿箱（`verify` / `push`，支持 `--bag`/`--article` 商单体检） | `wechat-studio draft push article.md --article <articleId> --style neo --theme forest --cover cover.png --json` |
 | `settings` | 查看或更新工作区配置（作者/标语/默认排版/服务凭证） | `wechat-studio settings set --author "你的名字" --slogan "一句话标语" --json` |
 | `style` | 管理个人写作风格（`status` / `analyze` / `preview` / `apply` / `restore`） | `wechat-studio style analyze sample1.md --prompt-only --json` |
 | `articles` | 管理共享稿件库（`list` / `get` / `import`） | `cat article.md \| wechat-studio articles import - --json` |
 | `insights` | 导入公众号后台 XLS 并汇总复盘指标 | `wechat-studio insights summary --range 30 --json` |
 | `derive` | 一稿多发（`markdown` / `thread` / `xhs`，支持 `--prompt-only`） | `wechat-studio derive markdown <id> --target zhihu --json` |
+
+**备稿与商单体检常用示例：**
+
+```bash
+# 查看活跃选题袋与自由纸条（支持 --bags / --notes / --sponsored）
+wechat-studio prep list --json
+
+# 随手记一条自由纸条或直接归入指定袋子（支持 - 读 stdin 及 --image 附本地图）
+wechat-studio prep note "开头直接拿真实翻车录屏切入" --bag <bagId> --image shot.png --json
+
+# 创建商单袋、导出确定性备料单给外部写作工具、写完后原地升格为正式稿件
+wechat-studio prep bag create "Cursor 2.0 实测" --sponsored --partner "Cursor" --date 2026-11-26 \
+  --selling-points "多文件重构速度" --must-include "专属试用链接,14天兑换码" --taboo "全网最强" --json
+wechat-studio prep bag export <bagId> --out brief.md --json
+wechat-studio prep bag promote <bagId> --markdown final.md --operation-id <id> --json
+
+# 带着商单袋或已关联稿件的约束做本地体检 / 推送前预检（--bag 与 --article 互斥）
+wechat-studio check final.md --bag <bagId> --json
+wechat-studio draft push final.md --article <articleId> --dry-run --json
+```
+
+`--operation-id` 可选。重试同一次建稿时，沿用相同的 ID、袋子和 Markdown 内容。
 
 ## 深入使用
 
@@ -332,6 +366,8 @@ an OVERSIZED, RELAXED-FIT heavyweight waffle-knit short-sleeve polo shirt in Mid
 | `*.bak` / `*.corrupt-*` | 上一版写入备份与损坏文件的隔离副本。某篇稿件打不开时，把同目录下的 `.corrupt-*` 或 `.bak` 改回 `article.json` 即可 |
 | `settings.json` | 插件设置和服务凭证 |
 | `insights.json` | 复盘导入数据、匹配、题材和写作尝试 |
+| `prep.json` | 备稿模块的选题袋/商单袋与纸条数据（独立存储、跨进程锁，旧稿件零迁移成本） |
+| `prep-assets/` | 备稿纸条的本地图片附件（按文件头魔数识别 PNG/JPEG/GIF/WebP，单张上限 10 MB，带引用保护与 24 小时孤儿清理） |
 | `covers/` | 生成的封面图片 |
 | `inline-images/` | 已生成但独立保存的正文插图 PNG 资产；清理不再引用的文件和崩溃遗留的孤儿文件 |
 | `skills/` | 用户覆盖技能、插图风格扩展，以及确认写入的复盘规则 |

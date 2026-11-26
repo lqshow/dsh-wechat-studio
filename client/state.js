@@ -11,9 +11,10 @@ export function countCurrentParagraphDrafts(blocks, drafts) {
   return blocks.filter(block => drafts.has(block.id)).length
 }
 
-let snap = { data: null, error: null, view: 'paper', paperHome: true, dialog: null, toast: null, editing: null, layout: null, deriveDrafts: {}, dismissedXhsErrors: {}, pending: null, chatOpen: true, bannerTried: {}, module: 'paper', skills: null, style: null, styleWizardStep: 1, styleWizardReturnTo: null, newDialogDraft: null, settings: null, update: null, insights: null, insightsRange: 'all', insightsError: null, insightsRulePreview: null, svgCardCandidate: null, coverStyles: null, customCoverWizard: { open: false, mode: 'create', styleId: null, returnTo: null, draftSession: null }, selectedCoverStyleId: null }
+let snap = { data: null, error: null, view: 'paper', paperHome: true, dialog: null, toast: null, editing: null, layout: null, deriveDrafts: {}, dismissedXhsErrors: {}, pending: null, chatOpen: true, bannerTried: {}, module: 'paper', skills: null, style: null, styleWizardStep: 1, styleWizardReturnTo: null, newDialogDraft: null, settings: null, update: null, insights: null, insightsRange: 'all', insightsError: null, insightsRulePreview: null, svgCardCandidate: null, coverStyles: null, customCoverWizard: { open: false, mode: 'create', styleId: null, returnTo: null, draftSession: null }, selectedCoverStyleId: null, prep: null, activeBagId: null, quickCaptureOpen: false }
 const listeners = new Set()
 let timer = null
+let stateRequest = 0
 
 export function getState() {
   return snap
@@ -97,6 +98,7 @@ function pruneDeriveDrafts(drafts, articles) {
 }
 
 function accept(data) {
+  stateRequest += 1
   const prevCurrent = snap.data?.current
   const current = data.current
   // 正文变了，之前排好的版式就过期了
@@ -125,9 +127,12 @@ export async function reimportMarkdown(body) {
 }
 
 export async function refresh() {
+  const sequence = ++stateRequest
   try {
-    accept(await request('state'))
+    const data = await request('state')
+    if (sequence === stateRequest) accept(data)
   } catch (err) {
+    if (sequence !== stateRequest) return
     setState({ error: err.message })
     clearTimeout(timer)
     timer = setTimeout(refresh, 4000)
@@ -877,4 +882,115 @@ export function closeCustomCoverStyleWizard({ preserveSession = false } = {}) {
         : { open: false, mode: 'create', styleId: null, returnTo: null, draftSession: null },
     }
   })
+}
+
+// ---------- 备稿（纸条 × 选题袋） ----------
+
+const PREP_PATCH_PATHS = new Set(['prep/notes/update', 'prep/bags/update'])
+const PREP_REFRESH_STATE_PATHS = new Set([
+  'prep/notes',
+  'prep/notes/update',
+  'prep/notes/delete',
+  'prep/notes/batch',
+  'prep/bags',
+  'prep/bags/promote',
+  'prep/bags/update',
+  'prep/bags/delete',
+  'prep/bags/reset-link',
+  'prep/notes/insert-to-article',
+])
+
+let prepRequest = 0
+let prepApplied = 0
+
+function applyPrepSnapshot(prep, sequence) {
+  if (sequence <= prepApplied || !prep || !Array.isArray(prep.bags) || !Array.isArray(prep.notes)) return
+  prepApplied = sequence
+  const normalized = { v: prep.v ?? 1, bags: prep.bags, notes: prep.notes }
+  setState(s => {
+    const activeExists = !s.activeBagId || normalized.bags.some(b => b.id === s.activeBagId)
+    return {
+      prep: normalized,
+      activeBagId: activeExists ? s.activeBagId : null,
+    }
+  })
+}
+
+export async function loadPrep() {
+  const sequence = ++prepRequest
+  try {
+    const prep = await request('prep')
+    applyPrepSnapshot(prep, sequence)
+    return prep
+  } catch (err) {
+    if (sequence !== prepRequest) return null
+    setState(s => ({
+      prep: s.prep
+        ? { ...s.prep, error: err.message }
+        : { v: 1, bags: [], notes: [], error: err.message },
+    }))
+    return null
+  }
+}
+
+export async function prepAct(path, body = {}, { method, refreshState, quiet = false } = {}) {
+  const sequence = refreshState === false ? null : ++prepRequest
+  const stateAtStart = stateRequest
+  const resolvedMethod = method ?? (PREP_PATCH_PATHS.has(path) ? 'PATCH' : 'POST')
+  setState({ pending: path })
+  try {
+    const result = await request(path, {
+      method: resolvedMethod,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    })
+    if (Array.isArray(result?.warnings) && result.warnings.length) {
+      toast(result.warnings.join('\n'))
+    }
+    const prep = result?.prep ?? result
+    if (Array.isArray(prep?.bags) && Array.isArray(prep?.notes)) {
+      if (sequence !== prepRequest) {
+        // Invalidate reads started while the mutation was still in flight.
+        prepApplied = prepRequest
+        await loadPrep()
+      } else applyPrepSnapshot(prep, sequence)
+    }
+    const hasFullState = Array.isArray(result?.articles) && Object.hasOwn(result, 'current')
+    if (hasFullState && stateAtStart === stateRequest) {
+      accept(result)
+    } else if (hasFullState || refreshState === true || (refreshState !== false && PREP_REFRESH_STATE_PATHS.has(path))) {
+      await refresh()
+    }
+    return result
+  } catch (err) {
+    if (!quiet) toast(err.message, true)
+    return null
+  } finally {
+    setState({ pending: null })
+  }
+}
+
+export async function uploadPrepAsset(file) {
+  if (!file) return null
+  const query = file.name ? `?${new URLSearchParams({ name: file.name })}` : ''
+  return request(`prep/assets${query}`, {
+    method: 'POST',
+    headers: { 'content-type': file.type || 'application/octet-stream' },
+    body: file,
+  })
+}
+
+export function openPrepBag(bagId) {
+  if (!bagId) {
+    setState({ activeBagId: null })
+    return
+  }
+  setState({ module: 'prep', activeBagId: bagId })
+  void loadPrep()
+}
+
+export function setQuickCaptureOpen(open) {
+  const next = Boolean(open)
+  setState({ quickCaptureOpen: next })
+  if (next) void loadPrep()
 }

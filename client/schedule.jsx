@@ -1,6 +1,6 @@
 // 排期页：左边待排坞，右边周历，拖拽即排期。公众号发布是手动的，这里只管排哪天、够不够格发、发完标记。
 import React from 'react'
-import { act, setState, toast, useStudio } from './state.js'
+import { act, openPrepBag, prepAct, setState, toast, useStudio } from './state.js'
 import { addDays, atOn, dayKey, isOverdue, mondayOf, parseDay } from '../src/schedule-time.js'
 import { AnimatedNumber, scrollBehavior, SlidingTabs, useDialogClose, useDirection, usePresence } from './motion.jsx'
 import { ScheduleAgenda } from './schedule-agenda.jsx'
@@ -93,6 +93,92 @@ function PublishedCard({ draft, located, onCorrect, onUnpublish }) {
         <CardMenu><button type="button" className="ws-link" onClick={() => onUnpublish(draft)}>撤销标记</button></CardMenu>
       </div>
     </article>
+  )
+}
+
+function PlaceholderCard({ placeholder, pending, onOpen, onReschedule, onClear }) {
+  const isSponsored = placeholder.type === 'sponsored'
+  const closeMenu = event => {
+    event.stopPropagation()
+    event.currentTarget.closest('details')?.removeAttribute('open')
+  }
+  return (
+    <article
+      id={`ws-sched-entry-${placeholder.id}`}
+      tabIndex={-1}
+      className={`ws-sched-entry ws-sched-placeholder ${isSponsored ? 'is-sponsored' : 'is-topic'}`}
+      onClick={event => {
+        if (event.target.closest('details, button')) return
+        onOpen(placeholder.id)
+      }}
+    >
+      <div className="ws-sched-entry-head">
+        <span className={`ws-sched-placeholder-tag ${isSponsored ? 'is-sponsored' : 'is-topic'}`}>
+          {isSponsored ? '商单占位 · 待开写' : '选题占位 · 待开写'}
+        </span>
+      </div>
+      <button type="button" className="ws-sched-entry-title" onClick={() => onOpen(placeholder.id)}>
+        {placeholder.title}
+      </button>
+      {isSponsored && placeholder.partner ? (
+        <span className="ws-sched-placeholder-partner">{placeholder.partner}</span>
+      ) : null}
+      <div className="ws-sched-entry-actions" onClick={event => event.stopPropagation()}>
+        <span className="ws-sched-placeholder-meta">已攒 {placeholder.noteCount} 条想法</span>
+        <CardMenu>
+          <button
+            type="button"
+            className="ws-link"
+            disabled={Boolean(pending)}
+            onClick={event => { closeMenu(event); onReschedule(placeholder) }}
+          >
+            改期
+          </button>
+          <button
+            type="button"
+            className="ws-link"
+            disabled={Boolean(pending)}
+            onClick={event => { closeMenu(event); onClear(placeholder) }}
+          >
+            取消占位
+          </button>
+        </CardMenu>
+      </div>
+    </article>
+  )
+}
+
+function PlaceholderDateDialog({ placeholder, onClose, onSave }) {
+  const [day, setDay] = React.useState(placeholder.targetDate || dayKey(new Date()))
+  const pending = useStudio(s => s.pending)
+  let preview = null
+  try {
+    const parsed = parseDay(day)
+    preview = `${parsed.getMonth() + 1} 月 ${parsed.getDate()} 日 ${weekdayName(parsed)}`
+  } catch {}
+  const submit = async event => {
+    event.preventDefault()
+    if (!day || !preview) return toast('请选择有效的目标日期', true)
+    if (await onSave(placeholder, day)) onClose()
+  }
+  return (
+    <ScheduleModal label="修改占位日期" onClose={onClose} onSubmit={submit} returnFocusId={placeholder.id}>
+      {requestClose => <>
+        <div className="ws-sched-picker-head">
+          <h2>占位改期</h2>
+          <button type="button" className="ws-icon-btn" aria-label="关闭" onClick={requestClose}><Icon name="close" /></button>
+        </div>
+        <p className="ws-sched-picker-title">{placeholder.title}</p>
+        <label className="ws-sched-field">目标日期
+          <input type="date" value={day} min="2000-01-01" max="2100-12-31" required data-autofocus onChange={e => setDay(e.target.value)} />
+        </label>
+        {preview ? <p className="ws-sched-selection">新占位日期：{preview}（升格成稿后自动排到当日 20:00）</p> : null}
+        <div className="ws-sched-picker-actions">
+          <button type="button" className="ws-btn" onClick={requestClose}>取消</button>
+          <button type="submit" className="ws-btn is-primary" disabled={!day || !preview || Boolean(pending)}>保存日期</button>
+        </div>
+      </>}
+    </ScheduleModal>
   )
 }
 
@@ -303,6 +389,7 @@ export function ScheduleView({ data }) {
   const [now, setNow] = React.useState(() => Date.now())
   const [weekKey, setWeekKey] = React.useState(() => dayKey(mondayOf(new Date())))
   const [picker, setPicker] = React.useState(null)
+  const [placeholderPicker, setPlaceholderPicker] = React.useState(null)
   const [publishDraft, setPublishDraft] = React.useState(null)
   const [overDay, setOverDay] = React.useState(null)
   const [dockOver, setDockOver] = React.useState(false)
@@ -349,18 +436,35 @@ export function ScheduleView({ data }) {
   const visibleDock = dock.filter(a => (dockFilter === 'all' || a.readiness.done === a.readiness.total) && (!normalizedDockQuery || a.title.toLocaleLowerCase().includes(normalizedDockQuery)))
   const scheduled = active.filter(a => a.scheduledFor && !a.publishedAt)
   const published = active.filter(a => a.publishedAt)
+  const placeholders = Array.isArray(data.prepPlaceholders) ? data.prepPlaceholders : []
   const weekStart = dayKey(days[0])
   const weekEnd = dayKey(days[6])
   const weekPublished = published.filter(a => { const k = dayKey(new Date(pubSlot(a))); return k >= weekStart && k <= weekEnd }).length
   const byDay = key => [...scheduled, ...published]
     .filter(a => dayKey(new Date(pubSlot(a))) === key)
     .sort((a, b) => new Date(pubSlot(a)) - new Date(pubSlot(b)) || a.id.localeCompare(b.id))
+  const placeholdersByDay = key => placeholders.filter(p => p.targetDate === key)
   const withCardLock = async (id, action) => {
     if (cardLocks.current.has(id)) return false
     cardLocks.current.add(id)
     try { return await action() } finally { cardLocks.current.delete(id) }
   }
   const saveSchedule = (id, at) => withCardLock(id, () => act('schedule/set', { id, at }))
+  const savePlaceholderDate = (placeholder, newDay) => withCardLock(placeholder.id, async () => {
+    const res = await prepAct('prep/bags/update', { id: placeholder.id, targetDate: newDay })
+    if (!res?.bag) return false
+    const parsed = parseDay(newDay)
+    const targetWeek = dayKey(mondayOf(parsed))
+    const text = `占位已改期到 ${parsed.getMonth() + 1} 月 ${parsed.getDate()} 日 ${weekdayName(parsed)}`
+    if (targetWeek === weekKey) { setScheduleNotice(null); toast(text) }
+    else setScheduleNotice({ text, targetWeek })
+    return true
+  })
+  const clearPlaceholderDate = placeholder => withCardLock(placeholder.id, async () => {
+    const res = await prepAct('prep/bags/update', { id: placeholder.id, targetDate: null })
+    if (res?.bag) toast('已取消排期占位')
+    return Boolean(res?.bag)
+  })
   const notifySchedule = (id, at) => {
     const collision = scheduled.some(a => a.id !== id && a.scheduledFor === at)
     const text = `已排到 ${dateLabel(at)} ${weekdayName(new Date(at))} ${timeLabel(at)}${collision ? '；此时段已有安排，仍已保留' : ''}`
@@ -423,6 +527,10 @@ export function ScheduleView({ data }) {
               <h1>排期</h1>
               <p className="ws-dh-dateline">
                 <span><b><AnimatedNumber value={dock.length} /></b> 篇待排</span>
+                {placeholders.length ? <>
+                  <span aria-hidden="true">·</span>
+                  <span><b><AnimatedNumber value={placeholders.length} /></b> 个备稿占位</span>
+                </> : null}
                 <span aria-hidden="true">·</span>
                 <span>所选周已发 <b><AnimatedNumber value={weekPublished} /></b> 篇</span>
                 <span aria-hidden="true">·</span>
@@ -465,13 +573,26 @@ export function ScheduleView({ data }) {
             </div>
           </aside>
           <section className="ws-sched-main" aria-label="排期议程与周日历">
-            <ScheduleAgenda scheduled={scheduled} now={now} onPublish={publish} onReschedule={pickFor} onUnschedule={unschedule} onLocate={locate} />
+            <ScheduleAgenda
+              scheduled={scheduled}
+              placeholders={placeholders}
+              now={now}
+              pending={pending}
+              onPublish={publish}
+              onReschedule={pickFor}
+              onUnschedule={unschedule}
+              onLocate={locate}
+              onOpenPlaceholder={openPrepBag}
+              onReschedulePlaceholder={setPlaceholderPicker}
+              onClearPlaceholder={clearPlaceholderDate}
+            />
             {scheduleNotice ? <div className="ws-sched-notice" role="status">{scheduleNotice.text}<button type="button" className="ws-link" onClick={() => { setWeekKey(scheduleNotice.targetWeek); setScheduleNotice(null) }}>查看当周</button></div> : null}
-            {!scheduled.length && !published.length ? <p className="ws-muted ws-small">还没有排期，从待排稿件选一篇，或点某日的「＋」。</p> : null}
+            {!scheduled.length && !published.length && !placeholders.length ? <p className="ws-muted ws-small">还没有排期，从待排稿件选一篇，或点某日的「＋」。</p> : null}
             <div key={weekKey} className={`ws-sched-week ${weekSlideClass}`}>
               {days.map(date => {
                 const key = dayKey(date)
                 const rows = byDay(key)
+                const dayPlaceholders = placeholdersByDay(key)
                 return (
                   <div key={key} className={`ws-sched-day ${key === dayKey(today) ? 'is-today' : ''} ${overDay === key ? 'is-over' : ''}`}
                     onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOverDay(key) }}
@@ -482,7 +603,17 @@ export function ScheduleView({ data }) {
                       {rows.map(d => d.publishedAt
                         ? <PublishedCard key={d.id} draft={d} located={pulseId === d.id} onCorrect={publish} onUnpublish={unpublishDraft} />
                         : <ScheduledCard key={d.id} draft={d} now={now} dragging={draggingId === d.id} located={pulseId === d.id} onPick={pickFor} onUnschedule={unschedule} onPublish={publish} onDragStart={dragStart} onDragEnd={dragEnd} />)}
-                      {!rows.length ? <span className="ws-sched-empty">暂无安排</span> : null}
+                      {dayPlaceholders.map(p => (
+                        <PlaceholderCard
+                          key={p.id}
+                          placeholder={p}
+                          pending={pending}
+                          onOpen={openPrepBag}
+                          onReschedule={setPlaceholderPicker}
+                          onClear={clearPlaceholderDate}
+                        />
+                      ))}
+                      {!rows.length && !dayPlaceholders.length ? <span className="ws-sched-empty">暂无安排</span> : null}
                     </div>
                   </div>
                 )
@@ -492,6 +623,7 @@ export function ScheduleView({ data }) {
         </div>
       </div>
       {picker ? <SchedulePicker data={data} picker={picker} onClose={() => setPicker(null)} onSave={saveSchedule} onSaved={notifySchedule} /> : null}
+      {placeholderPicker ? <PlaceholderDateDialog placeholder={placeholderPicker} onClose={() => setPlaceholderPicker(null)} onSave={savePlaceholderDate} /> : null}
       {publishDraft ? <PublishDialog draft={publishDraft} now={now} onClose={() => setPublishDraft(null)} onSave={savePublication} /> : null}
     </main>
   )

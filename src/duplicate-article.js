@@ -61,7 +61,7 @@ async function copyAssets(root, directory, entries, allowedFormats) {
   return { ids, cleanup: () => Promise.all(copied.map(file => rm(file, { force: true }).catch(() => {}))) }
 }
 
-export async function duplicateArticle(root, source) {
+export async function duplicateArticle(root, source, options = {}) {
   const runs = coverRuns(source)
   const covers = await copyAssets(
     root,
@@ -105,7 +105,11 @@ export async function duplicateArticle(root, source) {
     derivatives: {},
   })
   for (const block of article.blocks) delete block.prev
-  for (const key of ['archivedAt', 'scheduledFor', 'publishedAt', 'publishMarkedAt', 'imageImport', 'notice', 'inlineMessage', 'coverError', 'coverHistory', 'svgCardInsertions']) delete article[key]
+  for (const key of ['archivedAt', 'scheduledFor', 'publishedAt', 'publishMarkedAt', 'imageImport', 'notice', 'inlineMessage', 'coverError', 'coverHistory', 'svgCardInsertions', 'sourceBagId', 'sourceBagPromotion']) delete article[key]
+  if (options && options.sponsoredSnapshot !== undefined) {
+    if (options.sponsoredSnapshot === null) delete article.sponsoredSnapshot
+    else article.sponsoredSnapshot = structuredClone(options.sponsoredSnapshot)
+  }
   const remainingFeishu = feishuImageUrls(article.blocks).length
   if (remainingFeishu) {
     article.imageImport = { error: '原稿还有飞书图片未转存，可以重试。', remaining: remainingFeishu }
