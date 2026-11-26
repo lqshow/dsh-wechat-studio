@@ -389,7 +389,7 @@ test('formatBriefMarkdown 与 buildPromotionMaterial 确定性输出：置顶在
   assert.match(md1, /全网最强/)
   assert.equal(md1.includes('不带上的想法'), false)
   assert.ok(md1.indexOf('核心切入点') < md1.indexOf('普通想法 A'))
-  assert.ok(md1.includes('/tmp/ws/prep-assets/550e8400-e29b-41d4-a716-446655440000.png'))
+  assert.ok(md1.includes(join('/tmp/ws', 'prep-assets', '550e8400-e29b-41d4-a716-446655440000.png')))
 
   const material = buildPromotionMaterial(bag, notes)
   assert.equal(material.includes('不带上的想法'), false)

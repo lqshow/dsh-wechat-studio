@@ -170,7 +170,7 @@ test('prep note / bag create / list / bag export 完整工作流', async () => {
     assert.match(exportRes.markdown, /# Cursor 2\.0 实测/)
     assert.match(exportRes.markdown, /Cursor/)
     assert.match(exportRes.markdown, /专属试用链接/)
-    assert.match(exportRes.markdown, /prep-assets\//)
+    assert.match(exportRes.markdown, /prep-assets[/\\]/)
     assert.equal(await readFile(outFile, 'utf8'), exportRes.markdown)
   } finally {
     await rm(dir, { recursive: true, force: true })
