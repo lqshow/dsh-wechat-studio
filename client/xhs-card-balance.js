@@ -68,7 +68,7 @@ export function balanceXhsArtboard(root, sheet) {
     }
     sheet.textContent = fitRules
   }
-  const nodes = [...root.querySelectorAll('img,svg')]
+  const nodes = [...root.querySelectorAll('img,svg:not([data-xhs-decor])')]
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   const sizes = new Map()
   while (walker.nextNode()) {

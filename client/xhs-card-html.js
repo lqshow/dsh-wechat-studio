@@ -132,6 +132,8 @@ export const DEFAULT_XHS_TWEAKS = {
   density: 1,
   radius: 20,
   font: 'noto',
+  decor: 'auto',
+  decorScope: 'smart',
 }
 
 function escapeHtml(value) {
@@ -217,6 +219,19 @@ export const XHS_ARTBOARD_CSS = `
   position: relative;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+}
+.xhs-artboard > .xhs-ambient-decor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.xhs-artboard > :not(.xhs-ambient-decor) {
+  position: relative;
+  z-index: 1;
 }
 .xhs-artboard :where(h1, h2, h3, h4, strong, b) {
   line-height: 1.28;

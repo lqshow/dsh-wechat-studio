@@ -41,6 +41,7 @@ import {
   visibleXhsError,
 } from './state.js'
 import { renderCardDownload } from './xhs-card-render.js'
+import { XHS_DECOR_PRESETS, XHS_DECOR_SCOPES, renderCardAmbientDecor } from './xhs-card-decor.js'
 import {
   DEFAULT_XHS_TWEAKS,
   FONT_FAMILIES,
@@ -930,7 +931,7 @@ function resolveShadowTarget(event, rootEl) {
   return event?.target || rootEl
 }
 
-function XhsArtboardShadow({ html, className, themeVars, styleText, onArtboardReady }) {
+function XhsArtboardShadow({ html, decorSvg = '', className, themeVars, styleText, onArtboardReady }) {
   const hostRef = React.useRef(null)
   const onReadyRef = React.useRef(onArtboardReady)
   onReadyRef.current = onArtboardReady
@@ -961,9 +962,10 @@ function XhsArtboardShadow({ html, className, themeVars, styleText, onArtboardRe
     if (rootEl.style.cssText !== cssVars) {
       rootEl.style.cssText = cssVars
     }
-    if (rootEl.dataset.renderedHtml !== html) {
-      rootEl.innerHTML = html
-      rootEl.dataset.renderedHtml = html
+    const combinedHtml = decorSvg ? `${decorSvg}${html}` : html
+    if (rootEl.dataset.renderedHtml !== combinedHtml) {
+      rootEl.innerHTML = combinedHtml
+      rootEl.dataset.renderedHtml = combinedHtml
     }
     let balanceSheet = shadow.querySelector('style[data-balance]')
     if (!balanceSheet) {
@@ -976,7 +978,7 @@ function XhsArtboardShadow({ html, className, themeVars, styleText, onArtboardRe
     rootEl.addEventListener('load', balance, true)
     onReadyRef.current?.(rootEl)
     return () => rootEl.removeEventListener('load', balance, true)
-  }, [html, className, themeVars, styleText])
+  }, [html, decorSvg, className, themeVars, styleText])
 
   React.useLayoutEffect(() => () => {
     onReadyRef.current?.(null)
@@ -1527,6 +1529,8 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
         deckStyle,
         tweaks,
         customCss: draft?.customCss || '',
+        designPrompt: draft?.designPrompt || '',
+        artDirection: draft?.artDirection || null,
       })
       const num = String(index + 1).padStart(2, '0')
       downloadBlob(blob, `${safeFileBase(draft.title || article.title)}-${num}.${extension}`)
@@ -1556,6 +1560,8 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
             deckStyle,
             tweaks,
             customCss: draft?.customCss || '',
+            designPrompt: draft?.designPrompt || '',
+            artDirection: draft?.artDirection || null,
           })
           const data = new Uint8Array(await blob.arrayBuffer())
           files[i] = { name: `${base}-${String(i + 1).padStart(2, '0')}.${extension}`, data }
@@ -2414,6 +2420,14 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                             >
                               <XhsArtboardShadow
                                 html={cardHtml}
+                                decorSvg={renderCardAmbientDecor({
+                                  preset: tweaks.decor || 'auto',
+                                  scope: tweaks.decorScope || 'smart',
+                                  cardKind: card.kind,
+                                  deckStyle,
+                                  designPrompt: draft?.designPrompt || '',
+                                  artDirection: draft?.artDirection || null,
+                                })}
                                 className={resolveArtboardClassName(card)}
                                 themeVars={themeVars}
                                 styleText={cardStyleText}
@@ -3618,6 +3632,31 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                         <option value="mono">JetBrains Mono (极客等宽)</option>
                       </select>
                     </div>
+
+                    <div className="ws-cd-prop-row">
+                      <span>背景氛围装饰</span>
+                      <select
+                        value={tweaks.decor || 'auto'}
+                        onChange={e => updateTweaks({ decor: e.target.value })}
+                      >
+                        {XHS_DECOR_PRESETS.map(item => (
+                          <option key={item.id} value={item.id}>{item.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="ws-cd-prop-row">
+                      <span>装饰作用范围</span>
+                      <select
+                        value={tweaks.decorScope || 'smart'}
+                        onChange={e => updateTweaks({ decorScope: e.target.value })}
+                        disabled={(tweaks.decor || 'auto') === 'none'}
+                      >
+                        {XHS_DECOR_SCOPES.map(item => (
+                          <option key={item.id} value={item.id}>{item.label}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </>
               ) : null}
@@ -3777,6 +3816,14 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                         palette,
                         deckStyle,
                         tweaks,
+                      })}
+                      decorSvg={renderCardAmbientDecor({
+                        preset: tweaks.decor || 'auto',
+                        scope: tweaks.decorScope || 'smart',
+                        cardKind: lightboxCard.kind,
+                        deckStyle,
+                        designPrompt: draft?.designPrompt || '',
+                        artDirection: draft?.artDirection || null,
                       })}
                       className={resolveArtboardClassName(lightboxCard)}
                       themeVars={themeVars}

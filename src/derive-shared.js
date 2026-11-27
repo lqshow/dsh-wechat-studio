@@ -765,6 +765,12 @@ export function normalizeXhsTweaks(rawTweaks) {
   if (typeof rawTweaks.font === 'string' && ['noto', 'pingfang', 'serif', 'mono'].includes(rawTweaks.font)) {
     out.font = rawTweaks.font
   }
+  if (typeof rawTweaks.decor === 'string' && ['auto', 'silk-dots', 'editorial-frame', 'orbital-arc', 'swiss-grid', 'ink-wash', 'blueprint-tech', 'none'].includes(rawTweaks.decor)) {
+    out.decor = rawTweaks.decor
+  }
+  if (typeof rawTweaks.decorScope === 'string' && ['smart', 'cover', 'all', 'none'].includes(rawTweaks.decorScope)) {
+    out.decorScope = rawTweaks.decorScope
+  }
   return Object.keys(out).length ? out : null
 }
 

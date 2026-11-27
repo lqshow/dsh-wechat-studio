@@ -14,7 +14,7 @@ export function annotateArtboardDom(rootEl) {
     el.setAttribute('data-cd-id', path)
     let childIdx = 0
     for (const child of Array.from(el.children || [])) {
-      if (SKIP_TAGS.has(child.tagName)) continue
+      if (SKIP_TAGS.has(child.tagName) || child.getAttribute?.('data-xhs-decor') === '1') continue
       walk(child, path ? `${path}.${childIdx}` : String(childIdx))
       childIdx += 1
     }
@@ -255,6 +255,9 @@ export function readElementInspectorState(rootEl, targetId) {
 export function serializeArtboardHtml(rootEl) {
   if (!rootEl) return ''
   const clone = rootEl.cloneNode(true)
+  for (const decorNode of Array.from(clone.querySelectorAll?.('[data-xhs-decor="1"]') || [])) {
+    decorNode.remove()
+  }
   const stripAttrs = node => {
     if (node.removeAttribute) {
       node.removeAttribute('data-cd-id')

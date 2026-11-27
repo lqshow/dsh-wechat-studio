@@ -1,4 +1,5 @@
 import { balanceXhsArtboard } from './xhs-card-balance.js'
+import { renderCardAmbientDecor } from './xhs-card-decor.js'
 import { openCardAnimation, renderCardGif, setCardAnimationFrame } from './xhs-card-gif.js'
 // 在 1080×1440 逻辑画布上排版，以 2 倍像素密度导出 PNG。
 // 优先使用 SVG <foreignObject> 将 HTML/CSS 画布直接光栅化，
@@ -98,7 +99,15 @@ async function prepareHtmlArtboard(card, opts, animations) {
   const artboard = document.createElement('div')
   artboard.className = resolveArtboardClassName(card, opts)
   artboard.style.cssText = themeVarsToCssText(themeVars)
-  artboard.innerHTML = html
+  const decorSvg = renderCardAmbientDecor({
+    preset: opts.tweaks?.decor ?? 'auto',
+    scope: opts.tweaks?.decorScope ?? 'smart',
+    cardKind: card?.kind || 'list',
+    deckStyle: opts.deckStyle,
+    designPrompt: opts.designPrompt || '',
+    artDirection: opts.artDirection || null,
+  })
+  artboard.innerHTML = decorSvg ? `${decorSvg}${html}` : html
   host.appendChild(artboard)
 
   // 将所有 <img> 的外部 URL 内联为 DataURL，防止 foreignObject 污染或无法加载外部资源
