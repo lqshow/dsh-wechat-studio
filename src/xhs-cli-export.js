@@ -378,30 +378,39 @@ async function captureAnimatedCardGif({ browserPath, ffmpegPath, htmlPath, gifPa
   if (!resolvedSlots.length) return false
 
   const basePng = join(workTmp, `base-${cardNum}.png`)
-  await captureSingleCardPng(browserPath, htmlPath, basePng, 1)
+  await captureSingleCardPng(browserPath, htmlPath, basePng, 2)
 
-  const encodeWithScale = async (scaleW, scaleH) => {
-    const inputs = ['-i', basePng]
+  const encodeWithScale = async (scaleFactor) => {
+    const outW = Math.round(1080 * scaleFactor)
+    const outH = Math.round(1440 * scaleFactor)
+    const inputs = ['-loop', '1', '-i', basePng]
     const filterSteps = []
-    let prevLabel = '0:v'
+    if (scaleFactor === 2) {
+      filterSteps.push('[0:v]format=rgba[bg]')
+    } else {
+      filterSteps.push(`[0:v]scale=${outW}:${outH}:flags=lanczos,format=rgba[bg]`)
+    }
+    let prevLabel = 'bg'
     resolvedSlots.forEach((slot, idx) => {
-      inputs.push('-ignore_loop', '0', '-i', slot.localGif)
+      // 不设 -ignore_loop 0，让动图按原帧率完整播放一遍后自然结束；配合 basePng 的 -loop 1 与 shortest=1 精确保留全部帧
+      inputs.push('-i', slot.localGif)
       const inIdx = idx + 1
-      const w = Math.max(2, Math.round(slot.width))
-      const h = Math.max(2, Math.round(slot.height))
+      const w = Math.max(2, Math.round(slot.width * scaleFactor))
+      const h = Math.max(2, Math.round(slot.height * scaleFactor))
+      const x = Math.round(slot.x * scaleFactor)
+      const y = Math.round(slot.y * scaleFactor)
       const fitExpr = slot.objectFit === 'contain'
         ? `scale=${w}:${h}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=0x00000000`
         : `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}`
       filterSteps.push(`[${inIdx}:v]${fitExpr}[g${idx}]`)
       const outLabel = `ov${idx}`
-      const shortest = idx === 0 ? ':shortest=1' : ''
-      filterSteps.push(`[${prevLabel}][g${idx}]overlay=${slot.x}:${slot.y}${shortest}[${outLabel}]`)
+      const shortest = idx === 0 ? ':shortest=1' : ':eof_action=repeat'
+      filterSteps.push(`[${prevLabel}][g${idx}]overlay=${x}:${y}${shortest}[${outLabel}]`)
       prevLabel = outLabel
     })
-    const postScale = scaleW < 1080 ? `scale=${scaleW}:${scaleH}:flags=lanczos,` : ''
-    filterSteps.push(`[${prevLabel}]${postScale}split[s0][s1]`)
-    filterSteps.push('[s0]palettegen=stats_mode=diff[p]')
-    filterSteps.push('[s1][p]paletteuse=dither=bayer:bayer_scale=3')
+    filterSteps.push(`[${prevLabel}]split[s0][s1]`)
+    filterSteps.push('[s0]palettegen=max_colors=256:stats_mode=diff[p]')
+    filterSteps.push('[s1][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle')
 
     const args = [
       '-y',
@@ -410,15 +419,19 @@ async function captureAnimatedCardGif({ browserPath, ffmpegPath, htmlPath, gifPa
       '-loop', '0',
       gifPath,
     ]
-    await execFileAsync(ffmpegPath, args, { timeout: 60_000 })
+    await execFileAsync(ffmpegPath, args, { timeout: 90_000 })
   }
 
-  await encodeWithScale(1080, 1440)
-  const info = await stat(gifPath)
-  if (info.size > MAX_GIF_BYTES) {
-    await encodeWithScale(720, 960)
+  // 优先尝试 2×（2160×2880）高清导出，若超过 10 MB 上限则逐档降分辨率直到满足 <= 10 MB
+  let lastSize = 0
+  for (const scaleFactor of [2, 1.5, 1, 0.75]) {
+    await encodeWithScale(scaleFactor)
+    const info = await stat(gifPath)
+    lastSize = info.size
+    if (info.size <= MAX_GIF_BYTES) return true
   }
-  return true
+  await rm(gifPath, { force: true }).catch(() => {})
+  throw new Error(`压缩至最低分辨率后仍超过 10 MB（${(lastSize / 1_000_000).toFixed(1)} MB）`)
 }
 
 export async function exportXhsDeckToDir({

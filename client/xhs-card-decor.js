@@ -25,6 +25,7 @@ export const XHS_DECOR_SCOPES = Object.freeze([
 export function resolveAutoDecorPreset({ deckStyle = 'tech', designPrompt = '', artDirection = null } = {}) {
   const text = `${designPrompt || ''} ${artDirection?.genre || ''} ${artDirection?.visualLanguage || ''}`
   if (/手账|备课本|笔记线条/i.test(text)) return 'none'
+  if (/黑胶|唱片|vinyl|潮流.*zine/i.test(text)) return 'orbital-arc'
   if (/工业.*说明书|工具说明书|工程实测|终端/i.test(text)) return 'blueprint-tech'
   if (/瑞士.*荧光笔|瑞士海报|大字报/i.test(text)) return 'swiss-grid'
   if (/纽约客|复古.*报纸|专栏/i.test(text)) return 'editorial-frame'

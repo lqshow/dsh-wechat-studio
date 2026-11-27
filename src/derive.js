@@ -33,6 +33,23 @@ const XHS_BLUEPRINT_RETRY_MAX_TOKENS = 16_384
 const XHS_SINGLE_CARD_TIMEOUT_MS = 240_000
 const XHS_STAGE2_CARD_TIMEOUT_MS = 120_000
 const XHS_STAGE2_CONCURRENCY = 5
+
+async function callModelWithRateLimitRetry(ctx, opts, { maxRetries = 2, baseDelayMs = 2000 } = {}) {
+  let lastErr = null
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await callModel(ctx, opts)
+    } catch (err) {
+      lastErr = err
+      if (attempt >= maxRetries || !isRateLimitError(err) || opts?.signal?.aborted) {
+        throw err
+      }
+      const delayMs = baseDelayMs * (attempt + 1)
+      await new Promise(resolve => setTimeout(resolve, delayMs))
+    }
+  }
+  throw lastErr
+}
 const XHS_STAGE2_CARD_BLOCKS_MAX_CHARS = 6_000
 const XHS_STAGE2_FALLBACK_BLOCKS_MAX_CHARS = 8_000
 const XHS_RATE_LIMIT_RE = /429|rate[_ -]?limit|too many requests|quota|throttl|限流|请求过于频繁/i
@@ -633,7 +650,7 @@ async function runSingleCardModelCall(ctx, prompt, { maxTokens = 6144, images = 
     const signal = AbortSignal.timeout(XHS_SINGLE_CARD_TIMEOUT_MS)
     let raw
     try {
-      raw = await callModel(ctx, {
+      raw = await callModelWithRateLimitRetry(ctx, {
         system: prompt.system,
         user: userMessage,
         images,
@@ -901,6 +918,21 @@ async function synthesizeStagedXhsHtml(ctx, {
   return nextCards
 }
 
+function clampOverlongXhsTitle(parsed) {
+  if (!parsed || typeof parsed !== 'object' || typeof parsed.title !== 'string') {
+    return { parsed, warning: null }
+  }
+  const cleaned = parsed.title.replace(/#/g, '').replace(/[\r\n]+/g, ' ').trim()
+  const chars = Array.from(cleaned)
+  const limit = DERIVE_LIMITS.xhs.title
+  if (chars.length <= limit) return { parsed, warning: null }
+  const trimmed = chars.slice(0, limit).join('').trim()
+  return {
+    parsed: { ...parsed, title: trimmed },
+    warning: `小红书标题原为 ${chars.length} 字，已自动截断为 ${limit} 字，可在右侧「笔记文案」中微调`,
+  }
+}
+
 export async function generateDerivative(ctx, store, {
   id,
   platform,
@@ -973,6 +1005,7 @@ export async function generateDerivative(ctx, store, {
   let firstParsed = null
   let stage1UsedMarkup = false
   let stage1HasBlueprint = false
+  let stage1TitleClampWarning = null
   const initialMaxTokens = platform === 'xhs' ? Math.min(XHS_BLUEPRINT_MAX_TOKENS, xhsModelLimit ?? Infinity) : 8192
   for (let attempt = 0; attempt < 2; attempt++) {
     const retryAfterTruncation = lastError?.code === 'XHS_BLUEPRINT_MAX_TOKENS'
@@ -997,7 +1030,7 @@ export async function generateDerivative(ctx, store, {
             : '上一轮输出未能解析为合法 JSON（可能包含未转义的英文双引号或内容被截断）。请只输出紧凑合法的 JSON 对象，文案内部引用请一律使用中文引号「」。',
       })
     let finishKind
-    const raw = await callModel(ctx, {
+    const raw = await callModelWithRateLimitRetry(ctx, {
       system: prepared.system,
       user: userMessage,
       images: platform === 'xhs' ? stage1ReferenceImages : [],
@@ -1032,14 +1065,22 @@ export async function generateDerivative(ctx, store, {
         throw fail('模型没有返回可解析的 JSON。', 502)
       }
       if (attempt === 0) firstParsed = parsed
-      normalized = validate(parsed, { strictCardLength: attempt === 0 })
+      let candidate = parsed
+      if (platform === 'xhs' && attempt === 1) {
+        const clamped = clampOverlongXhsTitle(parsed)
+        candidate = clamped.parsed
+        stage1TitleClampWarning = clamped.warning
+      }
+      normalized = validate(candidate, { strictCardLength: attempt === 0 })
       break
     } catch (err) {
       lastError = err.status ? err : fail(err.message || '模型返回格式不符合要求。', 502)
       if (attempt === 1) {
         if (platform === 'xhs' && firstParsed) {
           try {
-            normalized = validate(firstParsed, { strictCardLength: false })
+            const clamped = clampOverlongXhsTitle(firstParsed)
+            normalized = validate(clamped.parsed, { strictCardLength: false })
+            stage1TitleClampWarning = clamped.warning
             break
           } catch {
             // 第一轮输出未满足硬约束，抛出第二轮错误
@@ -1235,7 +1276,10 @@ export async function generateDerivative(ctx, store, {
   }
 
   const { payload, warnings } = splitPayloadAndWarnings(normalized)
-  const finalWarnings = withVisionWarning(warnings)
+  const mergedWarnings = stage1TitleClampWarning && !warnings.includes(stage1TitleClampWarning)
+    ? [stage1TitleClampWarning, ...warnings]
+    : warnings
+  const finalWarnings = withVisionWarning(mergedWarnings)
   return store.update(state => {
     const current = findArticle(state, article.id)
     if (!stage1Persisted && current.derivatives?.[platform]?.editedAt && !confirmOverwrite) {
@@ -1388,18 +1432,25 @@ export async function applyXhsDerivative(store, {
       mergedPayload.tweaks = { ...(mergedPayload.tweaks || {}), ...tweaks }
     }
 
-    const normalized = normalizeXhs(mergedPayload, {
+    const clamped = clampOverlongXhsTitle(mergedPayload)
+    const normalized = normalizeXhs(clamped.parsed, {
       blockIds,
       sourceText,
       status: 400,
       strictCardLength: false,
     })
-    const { payload: cleanPayload, warnings } = splitPayloadAndWarnings(normalized)
+    const { payload: cleanPayload, warnings: baseWarnings } = splitPayloadAndWarnings(normalized)
+    const warnings = clamped.warning ? [clamped.warning, ...baseWarnings] : baseWarnings
     if (!article.derivatives || typeof article.derivatives !== 'object') {
       article.derivatives = {}
     }
+    const now = new Date().toISOString()
     const record = {
-      generatedAt: new Date().toISOString(),
+      platform: 'xhs',
+      variant: null,
+      createdAt: now,
+      generatedAt: now,
+      editedAt: null,
       sourceHash: articleSourceHash(article),
       payload: cleanPayload,
       warnings,
@@ -1458,6 +1509,7 @@ export function derivativesView(article) {
   return DERIVE_PLATFORMS
     .filter(platform => Boolean(map[platform]))
     .map(platform => ({
+      platform,
       ...map[platform],
       stale: map[platform].sourceHash !== currentHash,
     }))

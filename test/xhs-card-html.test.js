@@ -231,14 +231,15 @@ test('synthesizeCardHtml 为全部 8 种版式生成纵向自适应、高密度�
   const gridHtml = synthesizeCardHtml(samples.grid, { index: 2, total: 7 })
   assert.doesNotMatch(gridHtml, /高内聚模块设计|100% 就绪|ACTIVE/)
 
-  // 5 套内置视觉 Design Kit 原语全部就绪且可准确匹配
-  assert.equal(XHS_STYLE_KITS.length, 5)
+  // 6 套内置视觉 Design Kit 原语全部就绪且可准确匹配
+  assert.equal(XHS_STYLE_KITS.length, 6)
   assert.equal(resolveXhsStyleKit('像《纽约客》特稿混搭早期苹果印刷广告')?.id, 'newyorker')
   assert.equal(resolveXhsStyleKit('瑞士海报网格 × 编辑部荧光笔批注')?.id, 'swiss')
   assert.equal(resolveXhsStyleKit('像《Monocle》或《知日》编辑部专题')?.id, 'monocle')
   assert.equal(resolveXhsStyleKit('工业工具说明书风')?.id, 'manual')
   assert.equal(resolveXhsStyleKit('手账备课本风')?.id, 'notebook')
-  for (const cls of ['.ny-masthead', '.ny-dropcap', '.hl-mark', '.sw-anchor', '.mo-giant-num', '.ind-io-bar', '.nb-paper']) {
+  assert.equal(resolveXhsStyleKit('独立黑胶唱片封套 × 东京潮流 Zine 拼贴风格')?.id, 'vinyl')
+  for (const cls of ['.ny-masthead', '.ny-dropcap', '.hl-mark', '.sw-anchor', '.mo-giant-num', '.ind-io-bar', '.nb-paper', '.vn-wm', '.vn-sticker', '.vn-ribbon', '.vn-polaroid']) {
     assert.ok(XHS_ARTBOARD_CSS.includes(cls), `XHS_ARTBOARD_CSS 应内置原语类 ${cls}`)
   }
 })

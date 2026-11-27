@@ -230,7 +230,6 @@ export const XHS_ARTBOARD_CSS = `
   overflow: hidden;
 }
 .xhs-artboard > :not(.xhs-ambient-decor) {
-  position: relative;
   z-index: 1;
 }
 .xhs-artboard :where(h1, h2, h3, h4, strong, b) {
@@ -1321,6 +1320,149 @@ export const XHS_ARTBOARD_CSS = `
   gap: 12px;
   padding: 12px 0;
   border-bottom: 1px dashed var(--xhs-line);
+}
+
+/* ── 6. 黑胶唱片 × 潮流 Zine 原语 (.vn-*) ── */
+.vn-wm {
+  position: absolute;
+  top: 24px;
+  right: -18px;
+  z-index: 0;
+  font: 900 210px/0.85 var(--xhs-mono);
+  letter-spacing: -0.08em;
+  color: var(--xhs-accent);
+  opacity: 0.085;
+  pointer-events: none;
+  user-select: none;
+}
+.vn-sticker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  background: var(--xhs-accent);
+  color: #ffffff;
+  font: 900 20px/1.1 var(--xhs-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transform: rotate(-2.4deg);
+  box-shadow: 0 7px 0 rgba(0, 0, 0, 0.16);
+}
+.vn-ribbon {
+  position: relative;
+  padding: 20px 28px;
+  margin: 18px 0;
+  background: var(--xhs-accent);
+  color: #ffffff;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.4;
+  transform: skewY(-1.8deg);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+.vn-tape {
+  display: inline-block;
+  width: 128px;
+  height: 26px;
+  background: color-mix(in srgb, var(--xhs-tint) 78%, transparent);
+  border: 1px dashed var(--xhs-accent-line);
+  transform: rotate(-6deg);
+}
+.vn-polaroid {
+  background: var(--xhs-card);
+  padding: 16px 16px 48px;
+  border: 1px solid var(--xhs-line);
+  transform: rotate(-1.5deg);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.16);
+}
+.vn-polaroid img {
+  width: 100%;
+  display: block;
+  border-radius: 4px;
+}
+.vn-polaroid figcaption {
+  margin-top: 14px;
+  font-size: 19px;
+  line-height: 1.4;
+  color: var(--xhs-ink2);
+  text-align: center;
+}
+.vn-eq {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 30px;
+}
+.vn-eq i {
+  display: block;
+  width: 6px;
+  border-radius: 3px;
+  background: var(--xhs-accent);
+}
+.vn-eq i:nth-child(1) { height: 42%; }
+.vn-eq i:nth-child(2) { height: 86%; }
+.vn-eq i:nth-child(3) { height: 58%; }
+.vn-eq i:nth-child(4) { height: 100%; }
+.vn-eq i:nth-child(5) { height: 68%; }
+.vn-bar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.vn-bar-track {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.vn-bar-fill {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 4px;
+  background: var(--xhs-accent);
+  color: #ffffff;
+  font: 800 22px/44px var(--xhs-mono);
+  white-space: nowrap;
+}
+.vn-bar-fill.is-dark {
+  background: var(--xhs-dark);
+}
+.vn-bar-fill.is-soft {
+  background: var(--xhs-tint);
+  color: var(--xhs-ink);
+  border: 1px solid var(--xhs-accent-line);
+}
+.vn-spec-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 20px 24px;
+  border-radius: 6px;
+  background: var(--xhs-dark);
+  color: #ffffff;
+  font-family: var(--xhs-mono);
+}
+.vn-spec-strip, .vn-spec-strip * {
+  color: #ffffff;
+}
+.vn-dark-top {
+  background: var(--xhs-dark);
+  color: #ffffff;
+  padding: 52px 58px 64px;
+  position: relative;
+  overflow: hidden;
+}
+.vn-dark-top, .vn-dark-top * {
+  color: #ffffff;
+}
+.vn-track {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 0;
+  border-top: 1px solid var(--xhs-line);
+  font-size: 22px;
 }
 `
 

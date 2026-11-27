@@ -28,7 +28,8 @@ test('CLI derive xhs --options returns full style, theme, and ambient decor cata
   assert.equal(code, 0)
   const data = JSON.parse(io.read().out)
   assert.equal(data.ok, true)
-  assert.equal(data.styles.length, 8)
+  assert.equal(data.styles.length, 9)
+  assert.ok(data.styles.some(s => s.id === 'vinyl'))
   assert.equal(data.themes.length, 6)
   assert.equal(data.decors.length, 8)
   assert.equal(data.decorScopes.length, 4)
@@ -53,7 +54,8 @@ test('CLI derive xhs without style/design-prompt/ref-image triggers NEEDS_STYLE_
     assert.deepEqual(data.requiredQuestions.map(q => q.field), ['style', 'theme', 'decor'])
     assert.match(data.requiredQuestions[0].question, /swiss\(/)
     assert.match(data.requiredQuestions[0].question, /newyorker\(/)
-    assert.equal(data.options.styles.length, 8)
+    assert.match(data.requiredQuestions[0].question, /vinyl\(/)
+    assert.equal(data.options.styles.length, 9)
 
     // Partial selection (only --style, missing --theme and --decor) is still gated for remaining 2 steps
     const ioPartial = makeIo()
@@ -168,6 +170,25 @@ test('CLI derive xhs without API key automatically returns agent_generate bundle
     const previewHtml = await readFile(join(outDir, 'preview.html'), 'utf8')
     assert.match(previewHtml, /mo-giant-num/)
     assert.match(previewHtml, /data-decor-preset=&quot;silk-dots&quot;/)
+
+    // Running apply again with the exact same local markdown reuses the existing article (no duplicate drafts)
+    const io3 = makeIo({ env: {} })
+    const code3 = await runCli([
+      'derive', 'xhs', 'apply', mdPath, deckPath,
+      '--data-dir', dir,
+      '--style', 'monocle',
+      '--theme', 'editorial',
+      '--decor', 'silk-dots',
+      '--no-png',
+      '--json',
+    ], io3)
+    assert.equal(code3, 0)
+    const appliedAgain = JSON.parse(io3.read().out)
+    assert.equal(appliedAgain.id, applied.id)
+    assert.equal(appliedAgain.imported, false)
+    const storeAfter = await new Store(dir).read()
+    assert.equal(storeAfter.articles.length, 1)
+    assert.equal(storeAfter.articles[0].derivatives.xhs.platform, 'xhs')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -372,6 +393,15 @@ test('exportXhsDeckToDir automatically exports animated GIF for cards containing
     assert.match(res.mediaFiles[1], /02\.png$/)
     const gifBuf = await readFile(res.gifFiles[0])
     assert.equal(gifBuf.subarray(0, 6).toString('ascii'), 'GIF89a')
+    // Verify high-resolution 2x (2160x2880) logical screen size when under 10 MB
+    assert.equal(gifBuf.readUInt16LE(6), 2160)
+    assert.equal(gifBuf.readUInt16LE(8), 2880)
+    // Verify multiple animation frames (Graphic Control Extension 0x21 0xF9 0x04 appears >= 2 times)
+    let gceCount = 0
+    for (let i = 0; i < gifBuf.length - 3; i++) {
+      if (gifBuf[i] === 0x21 && gifBuf[i + 1] === 0xf9 && gifBuf[i + 2] === 0x04) gceCount++
+    }
+    assert.ok(gceCount >= 2, `Expected >= 2 animation frames in exported GIF, got ${gceCount}`)
     assert.ok(gifBuf.length > 5000, 'Rendered GIF should not be empty')
   } finally {
     await rm(outDir, { recursive: true, force: true })

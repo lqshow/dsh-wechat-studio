@@ -58,6 +58,7 @@ test('resolveAutoDecorPreset picks complementary decor for each design kit and d
   assert.equal(resolveAutoDecorPreset({ designPrompt: '红笔手账备课本' }), 'none')
   assert.equal(resolveAutoDecorPreset({ designPrompt: '工业工具说明书' }), 'blueprint-tech')
   assert.equal(resolveAutoDecorPreset({ designPrompt: 'Monocle 日系杂志' }), 'ink-wash')
+  assert.equal(resolveAutoDecorPreset({ designPrompt: '黑胶唱片 × 潮流 Zine' }), 'orbital-arc')
   assert.equal(resolveAutoDecorPreset({ deckStyle: 'bold' }), 'orbital-arc')
   assert.equal(resolveAutoDecorPreset({ deckStyle: 'editorial' }), 'ink-wash')
   assert.equal(resolveAutoDecorPreset({ deckStyle: 'tech' }), 'silk-dots')

@@ -1470,7 +1470,7 @@ body:has(.ws-xhs-studio) .ws-toast { bottom: 68px; }
 .ws-cd-floating-popover-head strong { font-size: 13px; color: var(--ink); }
 
 .ws-cd-empty-canvas { position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; padding: 24px; overflow-y: auto; }
-.ws-cd-empty-card { width: min(680px, 100%); margin: auto 0; display: flex; flex-direction: column; gap: 14px; padding: 24px 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); box-shadow: 0 12px 36px rgb(0 0 0 / .08); }
+.ws-cd-empty-card { width: min(780px, 100%); margin: auto 0; display: flex; flex-direction: column; gap: 10px; padding: 18px 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); box-shadow: 0 12px 36px rgb(0 0 0 / .08); }
 .ws-cd-empty-card-head { display: flex; flex-direction: column; gap: 4px; }
 .ws-cd-empty-card-head h3 { font-size: 16px; font-weight: 700; color: var(--ink); margin: 0; }
 .ws-cd-empty-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding-top: 4px; }
@@ -5131,23 +5131,28 @@ body[data-ds-dark-theme] .ws-source-bag-card.is-sponsored .ws-source-bag-note {
 .ws-crop-handle.is-sw { left: 0; top: 100%; cursor: nesw-resize; }
 .ws-crop-handle.is-w { left: 0; top: 50%; cursor: ew-resize; }
 
-/* 小红书风格模板可视化预览画廊 */
+/* 小红书风格模板可视化预览画廊（紧凑 5 列，9 套卡片 2 行一屏展示完） */
 .ws-style-gallery {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
 }
-@media (max-width: 640px) {
+@media (max-width: 760px) {
+  .ws-style-gallery {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
   .ws-style-gallery {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-.ws-style-card {
+.ws-style-gallery .ws-style-card {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 5px;
-  padding: 6px;
+  gap: 4px;
+  padding: 5px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--card);
@@ -5155,12 +5160,12 @@ body[data-ds-dark-theme] .ws-source-bag-card.is-sponsored .ws-source-bag-note {
   cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
-.ws-style-card:hover:not(:disabled) {
+.ws-style-gallery .ws-style-card:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
 }
-.ws-style-card.is-on {
+.ws-style-gallery .ws-style-card.is-on {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 6%, var(--card));
   box-shadow: 0 0 0 1px var(--accent);
@@ -5168,7 +5173,7 @@ body[data-ds-dark-theme] .ws-source-bag-card.is-sponsored .ws-source-bag-note {
 .ws-style-thumb-frame {
   position: relative;
   width: 100%;
-  aspect-ratio: 3 / 4;
+  aspect-ratio: 3 / 3.45;
   border-radius: 5px;
   overflow: hidden;
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -5178,17 +5183,18 @@ body[data-ds-dark-theme] .ws-source-bag-card.is-sponsored .ws-source-bag-note {
   display: block;
   width: 100%;
   height: 100%;
+  object-fit: cover;
 }
 .ws-style-thumb-check {
   position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 18px;
-  height: 18px;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
   background: var(--accent);
   color: #FFFFFF;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   display: flex;
   align-items: center;
@@ -5196,18 +5202,18 @@ body[data-ds-dark-theme] .ws-source-bag-card.is-sponsored .ws-source-bag-note {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
 }
 .ws-style-card-title {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--ink);
-  line-height: 1.25;
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .ws-style-card-sub {
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--ink3);
-  line-height: 1.25;
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -529,6 +529,12 @@ const DESIGN_PROMPT_CHIPS = [
     tagline: '衬线大标题 · 留白金句',
     value: '杂志画报风：克制留白、衬线大标题、不对称双栏与大号金句页',
   },
+  {
+    id: 'vinyl',
+    label: '黑胶唱片 × 潮流 Zine',
+    tagline: '黑胶装置 · 响度能量条 · 拍立得',
+    value: '独立黑胶唱片封套 × 东京潮流 Zine 拼贴风格：封面全深黑底，左侧超大跨行粗体标题（≥84px）与右上角半露大黑胶唱片 SVG 形成对角张力、配微倾贴纸（SIDE A · TRACK 01）与声波线，不留大片空黑；数据实测页用 LOUDNESS DATA 贴纸 + 5 柱均衡器 + 红/黑/浅粉三色横向响度能量条 + 斜切结论红带 + 底部深黑三栏 TRACK 规格条；其余内页配 200px 淡编号水印、微倾拍立得实测图框与斜切撞色带；尾页上下黑白拼接（半露黑胶压交界线）配细线 Tracklist 曲目单，绝不用普通圆角白卡片。',
+  },
 ]
 
 function StyleTemplateThumbnail({ id }) {
@@ -691,6 +697,27 @@ function StyleTemplateThumbnail({ id }) {
           <rect x="14" y="93" width="24" height="2" fill="#8C8376" />
           <rect x="48" y="87" width="28" height="2.6" fill="#18181B" />
           <rect x="48" y="93" width="24" height="2" fill="#8C8376" />
+        </svg>
+      )
+    case 'vinyl':
+      return (
+        <svg viewBox="0 0 90 120" className="ws-style-thumb-svg" aria-hidden="true">
+          <rect width="90" height="120" fill="#FAF8FA" />
+          <rect width="90" height="58" fill="#141118" />
+          <circle cx="72" cy="36" r="24" fill="#1E1B24" stroke="#FFFFFF" strokeOpacity="0.24" strokeWidth="1" />
+          <circle cx="72" cy="36" r="16" fill="none" stroke="#FFFFFF" strokeOpacity="0.18" strokeWidth="0.8" />
+          <circle cx="72" cy="36" r="8" fill="#E11D48" />
+          <circle cx="72" cy="36" r="2" fill="#141118" />
+          <rect x="9" y="13" width="24" height="7" fill="#E11D48" transform="rotate(-3 9 13)" />
+          <rect x="9" y="28" width="38" height="5" fill="#FFFFFF" />
+          <rect x="9" y="37" width="28" height="5" fill="#FFFFFF" />
+          <rect x="9" y="67" width="72" height="11" fill="#E11D48" transform="skewY(-2)" />
+          <line x1="9" y1="88" x2="81" y2="88" stroke="#E5E3EC" strokeWidth="1" />
+          <rect x="9" y="93" width="10" height="3" fill="#E11D48" />
+          <rect x="23" y="93" width="46" height="3" fill="#18181B" />
+          <line x1="9" y1="101" x2="81" y2="101" stroke="#E5E3EC" strokeWidth="1" />
+          <rect x="9" y="106" width="10" height="3" fill="#E11D48" />
+          <rect x="23" y="106" width="38" height="3" fill="#52505B" />
         </svg>
       )
     default:
@@ -3637,7 +3664,13 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                       <span>背景氛围装饰</span>
                       <select
                         value={tweaks.decor || 'auto'}
-                        onChange={e => updateTweaks({ decor: e.target.value })}
+                        onChange={e => {
+                          const nextDecor = e.target.value
+                          updateTweaks({
+                            decor: nextDecor,
+                            ...(nextDecor !== 'none' && (tweaks.decorScope || 'smart') === 'none' ? { decorScope: 'smart' } : {}),
+                          })
+                        }}
                       >
                         {XHS_DECOR_PRESETS.map(item => (
                           <option key={item.id} value={item.id}>{item.label}</option>

@@ -11,7 +11,7 @@ import { buildCoverPromptRequest } from './cover-prompt.js'
 import { COVER_STYLES } from './cover-styles.js'
 import { listCoverStyles, resolveCoverReferenceImage, resolveCoverStyle } from './custom-cover-styles.js'
 import { coverPrompt, generateCoverImage, readCover, saveCover } from './cover.js'
-import { applyXhsDerivative, extractArticleImages, generateDerivative, prepareDerivePrompt } from './derive.js'
+import { applyXhsDerivative, articleSourceHash, extractArticleImages, generateDerivative, prepareDerivePrompt } from './derive.js'
 import { toPortableMarkdown } from './derive-markdown.js'
 import { DERIVE_LIMITS, MARKDOWN_TARGETS, THREAD_VARIANTS, normalizeXhsTweaks, threadClipboardText, xhsClipboardText } from './derive-shared.js'
 import { XHS_DESIGN_STYLE_OPTIONS, resolveXhsDesignPromptOption, resolveXhsStyleKit } from './xhs-style-kits.js'
@@ -252,10 +252,10 @@ push 选项:
   wechat-studio derive xhs render <articleId> --out-dir <dir> [--theme <preset>] [--decor <preset>] [--decor-scope <scope>] [--no-png]
 说明:
   基于工作区稿件或本地 Markdown 文件，导出通用 Markdown 或提炼即刻/X 串推、小红书图文。
-  小红书支持 8 套视觉风格、自定义设计想法、参考图、6 套配色主题、6 套矢量背景氛围装饰，以及 --out-dir 直接输出文案、preview.html 与 2× 高清 PNG。
+  小红书支持 ${XHS_DESIGN_STYLE_OPTIONS.length} 套视觉风格、自定义设计想法、参考图、${XHS_STYLE_PRESETS.length} 套配色主题、6 套矢量背景氛围装饰，以及 --out-dir 直接输出文案、preview.html 与 2× 高清 PNG/GIF。
 常用选项:
   --options                            列出小红书可选风格、配色主题、背景氛围装饰与作用范围（供 Agent 生成前向用户确认）
-  --style <id>                         小红书视觉风格（auto/swiss/newyorker/monocle/manual/notebook/tech/editorial）
+  --style <id>                         小红书视觉风格（${XHS_DESIGN_STYLE_OPTIONS.map(s => s.id).join('/')}）
   --design-prompt <text>               自定义小红书设计想法（可单独使用，也可与 --style 叠加）
   --ref-image <path>                   本地参考图路径（PNG/JPEG/WebP，可重复传入，最多 10 张）
   --theme <preset>                     小红书配色主题（claude/editorial/tech/emerald/bold/theme）
@@ -1415,21 +1415,21 @@ function buildXhsOptionsCatalog() {
     {
       step: 1,
       field: 'style',
-      question: `第 1 步｜选视觉风格（全部 8 套：${styleInlineList}；也可输入自定义风格描述或本地参考图路径）`,
+      question: `第 1 步｜选视觉风格（全部 ${styles.length} 套：${styleInlineList}；也可输入自定义风格描述或本地参考图路径）`,
       flag: '--style <id> / --design-prompt "<自定义想法>" / --ref-image <path>',
       options: styles,
     },
     {
       step: 2,
       field: 'theme',
-      question: `第 2 步｜选配色主题（全部 6 套：${themeInlineList}）`,
+      question: `第 2 步｜选配色主题（全部 ${themes.length} 套：${themeInlineList}）`,
       flag: '--theme <preset>',
       options: themes,
     },
     {
       step: 3,
       field: 'decor',
-      question: `第 3 步｜选背景氛围装饰（全部 8 套：${decorInlineList}；范围默认 smart 封面浓/内页轻，也可指定 cover/all/none）`,
+      question: `第 3 步｜选背景氛围装饰（全部 ${decors.length} 套：${decorInlineList}；范围默认 smart 封面浓/内页轻，也可指定 cover/all/none）`,
       flag: '--decor <preset> --decor-scope <smart|cover|all|none>',
       options: decors,
       scopes: decorScopes,
@@ -1443,7 +1443,7 @@ function buildXhsOptionsCatalog() {
     requiredQuestions,
     interactionFlow: [
       '【强制 3 步】生成前必须向用户逐一确认全部 3 个独立问题（style 视觉风格、theme 配色主题、decor 背景氛围装饰），CLI 门禁会校验这 3 项是否齐全，缺任何一项都会被拦截。',
-      '【防选项截断】若客户端提问卡片每题最多只能放 4 个快捷按钮，请原样保留 requiredQuestions[i].question 中自带的全量选项速查表（让用户一眼看全全部 8 套风格/6 套配色/8 套装饰），再配 4 个最推荐快捷按钮供点选。',
+      `【防选项截断】若客户端提问卡片每题最多只能放 4 个快捷按钮，请原样保留 requiredQuestions[i].question 中自带的全量选项速查表（让用户一眼看全全部 ${styles.length} 套风格/${themes.length} 套配色/${decors.length} 套装饰），再配 4 个最推荐快捷按钮供点选。`,
       '传入稿件 ID、本地 .md 文件或 - 读 stdin，并带上 --style、--theme、--decor、--out-dir <dir> 即可生成或导出 2× 高清 PNG/GIF。',
     ],
   }
@@ -1503,15 +1503,20 @@ async function resolveXhsTargetArticle(input, store, io, { persistImport = true 
   }
   const markdown = await readTextFile(input, 'Markdown 文件或稿件 ID', io)
   if (!markdown.trim()) throw new UsageError('Markdown 内容为空。')
-  const article = createArticle({ markdown })
+  const candidate = createArticle({ markdown })
+  const candidateHash = articleSourceHash(candidate)
+  // 若工作区已有正文内容完全一致的未归档稿件，直接复用，避免同一本地 .md 反复跑 CLI 产生大量重复草稿
+  const matched = state.articles.find(a => !a.archivedAt && articleSourceHash(a) === candidateHash)
+  if (matched) return { article: matched, imported: false }
   if (persistImport) {
     await store.update(s => {
-      if (s.lastLayoutPreferences) article.layoutPreferences = { ...s.lastLayoutPreferences }
-      s.articles.push(article)
-      s.currentId = article.id
+      if (s.lastLayoutPreferences) candidate.layoutPreferences = { ...s.lastLayoutPreferences }
+      s.articles.push(candidate)
+      // 不覆盖工作区已有 currentId，避免外部 Agent 跑 CLI 时切走插件中正在编辑/生成的当前稿件
+      if (!s.currentId) s.currentId = candidate.id
     })
   }
-  return { article, imported: persistImport }
+  return { article: candidate, imported: persistImport }
 }
 
 function buildXhsAgentGenerateBundle({

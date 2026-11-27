@@ -1,4 +1,4 @@
-// 基于实测高水准样例提炼的 5 套小红书内置视觉 Design Kit：
+// 基于实测高水准样例提炼的 6 套小红书内置视觉 Design Kit：
 // 将强模型的高级排版原语沉淀为内置 CSS 类（定义在 client/xhs-card-html.js）+ 精简结构范例，
 // 让弱模型也能稳定复现出版级排版质感，同时大幅减少单页 CSS 体积、避免超预算回退。
 
@@ -62,6 +62,19 @@ export const XHS_STYLE_KITS = [
       '- 防溢出红线：预留左侧装订边距与底部 ≥ 64px 安全区，严禁便签遮挡正文或页脚。',
     ].join('\n'),
   },
+  {
+    id: 'vinyl',
+    name: '黑胶唱片 × 潮流 Zine',
+    pattern: /黑胶|唱片|vinyl|潮流.*zine|拼贴/i,
+    guidance: [
+      '# 内置风格原语包（黑胶唱片 × 潮流 Zine，优先复用以减少 CSS 体积）',
+      '- 可直接使用的内置类：.vn-wm（右上角 200px 巨型极淡背景页码水印）、.vn-sticker（微倾 -2.4° 高饱和撞色贴纸，如 SIDE A · TRACK 01 / INSERT · TAPE / LOUDNESS DATA / LAST TRACK）、.vn-ribbon（微倾 -1.8° 全宽撞色斜切色带）、.vn-tape（微倾半透明虚线胶带）、.vn-polaroid（微倾 -1.5° 拍立得厚白相框，底部宽白边放图注）、.vn-eq（5 柱音频均衡器，内放 5 个 <i>）、.vn-bar-row / .vn-bar-track / .vn-bar-fill（红/黑/浅粉三色「LOUDNESS DATA 响度能量条」，.is-dark 黑条、.is-soft 浅色条）、.vn-spec-strip（底部深黑三栏 TRACK A / B / C 规格栏）、.vn-dark-top（深黑半幅封面/尾页顶栏）、.vn-track（黑胶曲目单细线清单行）。',
+      '- 封面铁律：全深黑底，左侧放超大跨行粗体标题（≥ 84px）配微倾 .vn-sticker，右上角放半露在画布边缘的大号内联 SVG 黑胶唱片（同心沟槽 + var(--xhs-accent) 中心圆标）与标题形成对角张力，绝不留大片空黑；底部配音频声波折线 SVG。',
+      '- 数据/实测页铁律（LOUDNESS DATA）：用 .vn-sticker("LOUDNESS DATA") + .vn-eq 开篇，主体用 3 组 .vn-bar-row（交替使用红色 .vn-bar-fill、纯黑 .is-dark、浅粉 .is-soft 响度能量条，条内直接标核心数字）+ .vn-ribbon 斜切结论红带 + .vn-spec-strip 底部深黑三栏（TRACK A / B / C），绝不画普通四宫格白卡片。',
+      '- 尾页铁律：上半 .vn-dark-top 深黑（半露黑胶 SVG 压在黑白交界线上）+ 下半 .vn-track 细线 Tracklist 行动曲目单 + 撞色行动按钮。',
+      '- 防溢出红线：单页 CSS 保持精简（优先直接用 .vn-* 内置类），斜切与微倾元素预留左右边距，底部预留 ≥ 64px 安全区。',
+    ].join('\n'),
+  },
 ]
 
 export const XHS_DESIGN_STYLE_OPTIONS = Object.freeze([
@@ -112,6 +125,12 @@ export const XHS_DESIGN_STYLE_OPTIONS = Object.freeze([
     label: '编辑部杂志画报',
     tagline: '衬线大标题 · 留白金句',
     designPrompt: '杂志画报风：克制留白、衬线大标题、不对称双栏与大号金句页',
+  },
+  {
+    id: 'vinyl',
+    label: '黑胶唱片 × 潮流 Zine',
+    tagline: '黑胶装置 · 响度能量条 · 拍立得',
+    designPrompt: '独立黑胶唱片封套 × 东京潮流 Zine 拼贴风格：封面全深黑底，左侧超大跨行粗体标题（≥84px）与右上角半露大黑胶唱片 SVG 形成对角张力、配微倾贴纸（SIDE A · TRACK 01）与声波线，不留大片空黑；数据实测页用 LOUDNESS DATA 贴纸 + 5 柱均衡器 + 红/黑/浅粉三色横向响度能量条 + 斜切结论红带 + 底部深黑三栏 TRACK 规格条；其余内页配 200px 淡编号水印、微倾拍立得实测图框与斜切撞色带；尾页上下黑白拼接（半露黑胶压交界线）配细线 Tracklist 曲目单，绝不用普通圆角白卡片。',
   },
 ])
 
