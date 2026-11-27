@@ -20,7 +20,7 @@
 
 <br>
 
-<img src="docs/assets/hero.webp" alt="公众号成稿台：从写稿到复盘，一个工作台完成" width="100%">
+<img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/hero.webp" alt="公众号成稿台：从写稿到复盘，一个工作台完成" width="100%">
 
 <br>
 
@@ -30,7 +30,7 @@
 
 不是互不相干的小工具，而是一条连续的成稿路径：先在「备稿」随手记纸条、建选题袋/商单袋并占好排期，再升格或导入 `.md` / `.markdown` 进入稿面，按段修改并检查文字，完成封面、正文配图和排版，最后安排发布、导入后台数据复盘。
 
-<img src="docs/assets/workflow.gif" alt="导入 Markdown 稿件，按段改稿与质检，完成配图和排版，最后排期发布并复盘数据" width="100%">
+<img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/workflow.gif" alt="导入 Markdown 稿件，按段改稿与质检，完成配图和排版，最后排期发布并复盘数据" width="100%">
 
 <p align="center">
   <sub>稿面负责内容，配图负责视觉，排期负责行动，复盘负责下一次改进。</sub>
@@ -41,7 +41,7 @@
 在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的「插件」→「添加插件」中输入 **`dsh-wechat-studio`**，点击安装。完成后，从宿主侧栏打开「公众号成稿台」。
 
 <p align="center">
-  <img src="docs/assets/install.webp" alt="在 DeepSeek Harness 的添加插件窗口中输入 dsh-wechat-studio" width="720">
+  <img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/install.webp" alt="在 DeepSeek Harness 的添加插件窗口中输入 dsh-wechat-studio" width="720">
 </p>
 
 也可以使用命令行：
@@ -130,7 +130,7 @@ dsh plugin --profile desktop remove dsh-wechat-studio
 
 **改你指定的段落，而不是把整篇重来。**
 
-<img src="docs/assets/writing.webp" alt="成稿工作区：左侧对话改稿，中间编辑正文，右侧选择标题" width="100%">
+<img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/writing.webp" alt="成稿工作区：左侧对话改稿，中间编辑正文，右侧选择标题" width="100%">
 
 <table>
 <tr>
@@ -153,7 +153,7 @@ dsh plugin --profile desktop remove dsh-wechat-studio
 
 **问题落到段落，改动经过你确认。**
 
-<img src="docs/assets/quality.webp" alt="朱雀质检：正文标红、纸边批注、待处理队列和改写操作" width="100%">
+<img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/quality.webp" alt="朱雀质检：正文标红、纸边批注、待处理队列和改写操作" width="100%">
 
 通过 API 在线检测，或导入朱雀 PDF 报告。待处理段落会出现在纸边批注和右侧队列里，点一下就能定位；支持单段改写和批量处理，每处修改都能看差异、保留原文或恢复上一版。
 
@@ -167,12 +167,12 @@ dsh plugin --profile desktop remove dsh-wechat-studio
 <tr>
 <td width="50%" valign="top">
 <h4>封面与正文插图</h4>
-<img src="docs/assets/cover-inline.webp" alt="封面生成历史与当前封面，右侧可见正文插图和动画卡工具" width="100%">
+<img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/cover-inline.webp" alt="封面生成历史与当前封面，右侧可见正文插图和动画卡工具" width="100%">
 <p>六套内置封面风格，生成结果留在历史里，可查看提示词、下载或重新选用。正文插图先分析位置，再由你决定生成和插入；确认前不改正文。</p>
 </td>
 <td width="50%" valign="top">
 <h4>SVG 动画卡</h4>
-<img src="docs/assets/svg-cards.webp" alt="正文中的 SVG 动画卡和右侧候选生成工具" width="100%">
+<img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/svg-cards.webp" alt="正文中的 SVG 动画卡和右侧候选生成工具" width="100%">
 <p>概念、步骤、拆解、对比、表格、柱状图、时间线和手机演示，八种卡型根据选中的段落生成。标题与条目可编辑，确认效果后才进入正文。</p>
 </td>
 </tr>
@@ -180,7 +180,7 @@ dsh plugin --profile desktop remove dsh-wechat-studio
 
 <br>
 
-<img src="docs/assets/layout.webp" alt="公众号排版预览，包含正文风格、配色、开头横幅和复制全文" width="100%">
+<img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/layout.webp" alt="公众号排版预览，包含正文风格、配色、开头横幅和复制全文" width="100%">
 
 10 套正文风格、15 套配色，加上开头横幅和文末关注卡；正文插图与动画卡也会进入同一份排版。点击「复制全文到公众号」即可粘贴到编辑器，自查报告会提示外部图片、视频占位等需要人工确认的项目。
 
@@ -188,7 +188,7 @@ dsh plugin --profile desktop remove dsh-wechat-studio
 
 **让每一篇稿子，在日历里有明确的位置。**
 
-<img src="docs/assets/schedule.webp" alt="排期页：待排稿件、今日待办、过点确认和一周日历" width="100%">
+<img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/schedule.webp" alt="排期页：待排稿件、今日待办、过点确认和一周日历" width="100%">
 
 待排稿件支持搜索和就绪筛选，可以拖拽或按日期、时段排期。今日待办与过点待确认分开，周历随窗口宽度调整；标记已发时可补记真实发表时间，重复确认不会覆盖首次记录，也可以更正或撤销。
 
@@ -196,7 +196,7 @@ dsh plugin --profile desktop remove dsh-wechat-studio
 
 **不只看阅读量，也记录下一篇要试什么。**
 
-<img src="docs/assets/insights.webp" alt="数据复盘：账号指标、每日阅读趋势和流量来源" width="100%">
+<img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/insights.webp" alt="数据复盘：账号指标、每日阅读趋势和流量来源" width="100%">
 
 直接导入微信公众号后台的 XLS，查看账号趋势、用户增长、单篇明细和流量来源。按题材和标题套路比较文章表现，记录下一次要试什么；数据提炼出的写作规则，确认后可以保存为 Skill。
 
@@ -431,6 +431,25 @@ Host 接口通过宿主鉴权。页面只读取凭证是否已配置，密钥由
 ### GitHub Actions 与发版
 
 日常质检与标签发版由 GitHub Actions 自动执行。工作流说明、npm 发布配置及发版步骤见 [维护与发版指南](.github/RELEASING.md)。
+
+## 作者与交流
+
+我是**林月半子**，平时在公众号和小红书分享 AI 工程实践与内容工具。这个「公众号成稿台」最初就是为我自己每天写稿做的——备稿灵感散落、改稿来回搬运、排版和小红书一稿多发太费时间，踩过的坑都一点点做进了这套工作台里。
+
+用得顺手或不顺手，欢迎直接提 [Issue](https://github.com/lqshow/dsh-wechat-studio/issues)，也欢迎加微信或进群一起交流玩法和需求（加好友请备注「**成稿台**」）：
+
+<table>
+<tr>
+<td align="center" width="240">
+  <img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/wechat-author.jpg" width="180" alt="作者微信：林月半子" /><br />
+  <sub><b>作者微信 · 林月半子</b><br />加好友请备注「成稿台」</sub>
+</td>
+<td align="center" width="240">
+  <img src="https://raw.githubusercontent.com/lqshow/dsh-wechat-studio/main/docs/assets/wechat-group.jpg" width="180" alt="交流群：林月半子的 AI 写作工作台" /><br />
+  <sub><b>林月半子的 AI 写作工作台</b><br />群码若过期请加左侧微信拉群</sub>
+</td>
+</tr>
+</table>
 
 ## 许可证与致谢
 
