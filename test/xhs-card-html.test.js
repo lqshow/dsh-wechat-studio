@@ -7,6 +7,7 @@ import {
   normalizeCardImageFraming,
   normalizeXhs,
 } from '../src/derive-shared.js'
+import { XHS_STYLE_KITS, resolveXhsStyleKit } from '../src/xhs-style-kits.js'
 import {
   DEFAULT_XHS_TWEAKS,
   XHS_ARTBOARD_CSS,
@@ -14,6 +15,7 @@ import {
   buildCardStyleText,
   buildImageFramingStyle,
   ensureCardHtml,
+  resolveArtboardClassName,
   resolveXhsThemeVars,
   synthesizeCardHtml,
 } from '../client/xhs-card-html.js'
@@ -197,11 +199,17 @@ test('synthesizeCardHtml 为全部 8 种版式生成纵向自适应、高密度�
   assert.ok(coverWithFramedImg.includes('data-img-pos-x="85"'))
   assert.ok(coverWithFramedImg.includes('object-position:85% 40%'))
 
-  // normalizeXhs 保留卡片的 imageFraming 与 html
+  // normalizeXhs 保留卡片的 imageFraming、html 与 artDirection
   const normalized = normalizeXhs({
     title: '插图位置微调测试',
     body: '这是一段满一百字的小红书正文测试内容，用于验证卡片插图的左右构图焦点偏移、缩放与平移参数在保存时能够完整保留。'.repeat(2),
     tags: ['插图微调', '构图控制', '小红书'],
+    artDirection: {
+      genre: '编辑部杂志深度复盘',
+      visualLanguage: '大衬线标题 + 开放式细线分割，拒绝方框套方框',
+      rhythm: '封面 → 开放式步骤 → 金句 → 浅色尾页',
+      endMood: 'light',
+    },
     cards: [
       { ...samples.cover, imageUrl: 'https://cdn.example.com/hero.png', imageFraming: framing },
       samples.compare,
@@ -211,4 +219,26 @@ test('synthesizeCardHtml 为全部 8 种版式生成纵向自适应、高密度�
     ],
   }, { strictCardLength: false })
   assert.deepEqual(normalized.cards[0].imageFraming, framing)
+  assert.deepEqual(normalized.artDirection, {
+    genre: '编辑部杂志深度复盘',
+    visualLanguage: '大衬线标题 + 开放式细线分割，拒绝方框套方框',
+    rhythm: '封面 → 开放式步骤 → 金句 → 浅色尾页',
+    endMood: 'light',
+  })
+
+  // 尾页画布不再强制套用暗黑 .is-dark-artboard，且兜底模板不含假仪表盘水词
+  assert.equal(resolveArtboardClassName({ kind: 'end' }), 'xhs-artboard')
+  const gridHtml = synthesizeCardHtml(samples.grid, { index: 2, total: 7 })
+  assert.doesNotMatch(gridHtml, /高内聚模块设计|100% 就绪|ACTIVE/)
+
+  // 5 套内置视觉 Design Kit 原语全部就绪且可准确匹配
+  assert.equal(XHS_STYLE_KITS.length, 5)
+  assert.equal(resolveXhsStyleKit('像《纽约客》特稿混搭早期苹果印刷广告')?.id, 'newyorker')
+  assert.equal(resolveXhsStyleKit('瑞士海报网格 × 编辑部荧光笔批注')?.id, 'swiss')
+  assert.equal(resolveXhsStyleKit('像《Monocle》或《知日》编辑部专题')?.id, 'monocle')
+  assert.equal(resolveXhsStyleKit('工业工具说明书风')?.id, 'manual')
+  assert.equal(resolveXhsStyleKit('手账备课本风')?.id, 'notebook')
+  for (const cls of ['.ny-masthead', '.ny-dropcap', '.hl-mark', '.sw-anchor', '.mo-giant-num', '.ind-io-bar', '.nb-paper']) {
+    assert.ok(XHS_ARTBOARD_CSS.includes(cls), `XHS_ARTBOARD_CSS 应内置原语类 ${cls}`)
+  }
 })

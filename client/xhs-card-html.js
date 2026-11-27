@@ -989,6 +989,324 @@ export const XHS_ARTBOARD_CSS = `
   font-size: calc(20px * var(--xhs-scale, 1));
   font-weight: 700;
 }
+
+/* ==================== 1. 复古科技报纸 / 纽约客专栏原语 (.ny-*) ==================== */
+.ny-masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  border-top: 3px solid var(--xhs-ink);
+  border-bottom: 1px solid var(--xhs-ink);
+  padding: 10px 0;
+  font-family: var(--xhs-mono);
+  font-size: 18px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  color: var(--xhs-ink2);
+  text-transform: uppercase;
+}
+.ny-kicker {
+  font-family: var(--xhs-mono);
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  color: var(--xhs-accent);
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+.ny-serif-title {
+  margin: 0;
+  font-family: Georgia, "Songti SC", "Noto Serif SC", serif;
+  font-size: calc(60px * var(--xhs-scale, 1));
+  font-weight: 900;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--xhs-ink);
+}
+.ny-pullquote {
+  margin: 0;
+  padding: 0 0 8px;
+  border-bottom: 2px solid var(--xhs-accent);
+  font-family: Georgia, "Songti SC", "Noto Serif SC", serif;
+  font-size: calc(30px * var(--xhs-scale, 1));
+  font-weight: 800;
+  line-height: 1.38;
+  color: var(--xhs-ink);
+}
+.ny-dropcap {
+  float: left;
+  font-family: Georgia, "Songti SC", "Noto Serif SC", serif;
+  font-size: calc(74px * var(--xhs-scale, 1));
+  font-weight: 900;
+  line-height: 0.86;
+  padding: 6px 12px 0 0;
+  color: var(--xhs-ink);
+}
+.ny-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  flex: 1;
+  min-height: 0;
+}
+.ny-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.ny-cols > .ny-col + .ny-col {
+  border-left: 1px solid var(--xhs-line);
+  padding-left: 28px;
+}
+.ny-fig {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--xhs-line);
+  background: var(--xhs-card);
+}
+.ny-fig img {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: cover;
+}
+.ny-fig-cap {
+  font-family: var(--xhs-mono);
+  font-size: 18px;
+  line-height: 1.35;
+  color: var(--xhs-ink3);
+}
+.ny-ledger {
+  display: flex;
+  height: 14px;
+  width: 100%;
+  background: var(--xhs-muted-bg);
+  border: 1px solid var(--xhs-line);
+  overflow: hidden;
+}
+.ny-ledger-fill {
+  background: var(--xhs-accent);
+  height: 100%;
+}
+.ny-endmark {
+  display: inline-block;
+  color: var(--xhs-ink);
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* ==================== 2. 瑞士大字报 + 荧光笔批注原语 (.sw-* / .hl-mark) ==================== */
+.sw-heavy-rule,
+.swiss-heavy-rule {
+  border: 0;
+  border-top: 3px solid var(--xhs-ink);
+  margin: 0;
+}
+.sw-rule,
+.swiss-rule {
+  border: 0;
+  border-top: 1px solid var(--xhs-line);
+  margin: 0;
+}
+.sw-anchor {
+  font-size: calc(88px * var(--xhs-scale, 1));
+  font-weight: 900;
+  line-height: 0.96;
+  letter-spacing: -0.04em;
+  color: var(--xhs-ink);
+}
+.hl-mark {
+  background: linear-gradient(180deg, transparent 52%, rgba(250, 204, 21, 0.5) 52%, rgba(250, 204, 21, 0.5) 92%, transparent 92%);
+  padding: 0 4px;
+}
+.sw-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px 32px;
+}
+.sw-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--xhs-line);
+}
+.sw-note {
+  padding: 18px 22px;
+  background: var(--xhs-tint);
+  border-left: 5px solid var(--xhs-accent);
+  font-size: calc(23px * var(--xhs-scale, 1));
+  line-height: 1.48;
+  color: var(--xhs-ink);
+}
+
+/* ==================== 3. Monocle 日系深度杂志原语 (.mo-*) ==================== */
+.mo-issue-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--xhs-line);
+  font-family: var(--xhs-mono);
+  font-size: 18px;
+  letter-spacing: 0.1em;
+  color: var(--xhs-ink3);
+  text-transform: uppercase;
+}
+.mo-giant-num {
+  font-family: Georgia, "Songti SC", "Noto Serif SC", serif;
+  font-size: calc(96px * var(--xhs-scale, 1));
+  font-weight: 400;
+  line-height: 0.88;
+  color: var(--xhs-line);
+  letter-spacing: -0.04em;
+}
+.mo-body-with-rail {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+}
+.mo-rail {
+  writing-mode: vertical-rl;
+  font-size: 18px;
+  letter-spacing: 0.16em;
+  color: var(--xhs-ink3);
+  border-right: 1px solid var(--xhs-line);
+  padding-right: 14px;
+  display: flex;
+  align-items: flex-start;
+}
+.mo-split {
+  display: grid;
+  grid-template-columns: 0.36fr 0.64fr;
+  gap: 28px;
+  align-items: start;
+}
+.mo-hairline-item {
+  padding: 18px 0;
+  border-top: 1px solid var(--xhs-line);
+}
+.mo-letter-end {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px 32px;
+  background: var(--xhs-card);
+  border-top: 2px solid var(--xhs-ink);
+  border-bottom: 1px solid var(--xhs-line);
+}
+
+/* ==================== 4. 工业工具说明书原语 (.ind-*) ==================== */
+.ind-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  background: var(--xhs-ink);
+  color: #FFFFFF;
+  font-family: var(--xhs-mono);
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+}
+.ind-tag-accent {
+  background: var(--xhs-accent);
+  color: #FFFFFF;
+}
+.ind-tag-tint {
+  background: var(--xhs-tint);
+  color: var(--xhs-accent);
+  border: 1px solid var(--xhs-accent-line);
+}
+.ind-giant-num {
+  font-family: var(--xhs-mono);
+  font-size: calc(88px * var(--xhs-scale, 1));
+  font-weight: 900;
+  line-height: 0.92;
+  letter-spacing: -0.04em;
+  color: var(--xhs-accent);
+}
+.ind-io-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 18px 22px;
+  background: var(--xhs-dark);
+  color: #FFFFFF;
+}
+.ind-io-bar * {
+  color: #FFFFFF;
+}
+.ind-spec-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 18px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--xhs-line);
+  align-items: baseline;
+}
+.ind-tear-note {
+  padding: 18px 22px;
+  background: var(--xhs-dark);
+  color: #FFFFFF;
+  border-top: 2px dashed rgba(255, 255, 255, 0.35);
+}
+.ind-tear-note * {
+  color: #FFFFFF;
+}
+
+/* ==================== 5. 红笔手账备课本原语 (.nb-*) ==================== */
+.nb-paper {
+  background-color: var(--xhs-bg);
+  background-image:
+    linear-gradient(to bottom, transparent 47px, var(--xhs-line) 48px),
+    linear-gradient(to right, var(--xhs-accent-line) 0, var(--xhs-accent-line) 2px, transparent 2px);
+  background-size: 100% 48px, 100% 100%;
+  background-position: 0 24px, 76px 0;
+  padding-left: 96px;
+}
+.nb-margin-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 19px;
+  font-weight: 800;
+  color: var(--xhs-accent);
+}
+.nb-stamp {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border: 2px solid var(--xhs-accent);
+  color: var(--xhs-accent);
+  font-size: 18px;
+  font-weight: 800;
+  transform: rotate(-2deg);
+}
+.nb-tape-note {
+  padding: 16px 20px;
+  background: var(--xhs-tint);
+  border: 1px solid var(--xhs-accent-line);
+  transform: rotate(-1deg);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+.nb-highlight {
+  background: linear-gradient(180deg, transparent 54%, var(--xhs-tint) 54%, var(--xhs-tint) 94%, transparent 94%);
+  padding: 0 5px;
+}
+.nb-check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--xhs-line);
+}
 `
 
 function highlightHeadingHtml(text, hlClass = 'cd-hl') {
@@ -1424,13 +1742,13 @@ function synthesizeStepsHtml(card, { index, total, author }) {
       <div class="cd-step-list">
         ${parsed.map((parts, idx) => {
           const title = parts[0] || `步骤 0${idx + 1}`
-          const desc = parts.slice(1).join(' · ') || '按标准动作执行，确保上下文与产出一致'
+          const desc = parts.slice(1).join(' · ')
           return `
             <div class="cd-step-item">
               <span class="cd-step-num">${idx + 1}</span>
               <div class="cd-step-content">
                 <div class="cd-step-title">${escapeHtml(title)}</div>
-                <div class="cd-step-desc">${escapeHtml(desc)}</div>
+                ${desc ? `<div class="cd-step-desc">${escapeHtml(desc)}</div>` : ''}
               </div>
             </div>
           `
@@ -1470,34 +1788,23 @@ function synthesizeGridHtml(card, { index, total, author }) {
 
       <div class="cd-col-grid" style="--cols:2;">
         ${parsed.map((parts, idx) => {
-          const title = parts[0] || `模块 0${idx + 1}`
-          const desc = parts.slice(1).join(' · ') || '高内聚模块设计，开箱即用'
+          const title = parts[0] || `要点 0${idx + 1}`
+          const desc = parts.slice(1).join(' · ')
           return `
             <div class="cd-bento">
-              <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                <span class="cd-accent-pill">0${idx + 1}</span>
-                <span class="cd-code-pill">ACTIVE</span>
-              </div>
+              <span class="cd-accent-pill">0${idx + 1}</span>
               <div class="cd-bento-title is-ink" style="font-size:calc(31px * var(--xhs-scale, 1));">${escapeHtml(title)}</div>
-              <p class="cd-bento-body">${escapeHtml(desc)}</p>
-              <div style="margin-top:auto; padding-top:10px; border-top:1px dashed var(--xhs-line); display:flex; align-items:center; justify-content:space-between; font-size:18px; color:var(--xhs-ink3); font-weight:700;">
-                <span>核心能力组件</span>
-                <span style="color:var(--xhs-accent);">100% 就绪</span>
-              </div>
+              ${desc ? `<p class="cd-bento-body">${escapeHtml(desc)}</p>` : ''}
             </div>
           `
         }).join('')}
       </div>
 
-      <div class="cd-card" style="border-color:var(--xhs-accent-line); background:var(--xhs-tint);">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-          <span class="cd-section-tag is-accent">核心结论 · 落地建议</span>
-          <span class="cd-code-pill" style="background:#FFFFFF;">SUMMARY</span>
+      ${(card.callout || card.accent) ? `
+        <div class="cd-callout">
+          <div class="cd-callout-line">· ${escapeHtml(card.callout || card.accent)}</div>
         </div>
-        <div style="font-size:calc(25px * var(--xhs-scale, 1)); font-weight:800; color:var(--xhs-ink); line-height:1.45;">
-          ${escapeHtml(card.callout || card.accent || '把零散动作收敛进统一结构，每次复用都不必从头造轮子')}
-        </div>
-      </div>
+      ` : ''}
     </div>
 
     <div class="cd-footer">
@@ -1615,53 +1922,52 @@ function synthesizeEndHtml(card, { index, total, author }) {
   const pageNo = String(index + 1).padStart(2, '0')
   const rawLines = Array.isArray(card.lines) && card.lines.length
     ? card.lines
-    : ['第一步：先收藏 | 下次实操时直接翻出来对照', '第二步：跑通闭环 | 按卡片顺序逐项打钩验证', '第三步：回来交作业 | 有问题评论区随时交流']
+    : ['先收藏 | 下次实操时直接翻出来对照', '跑通闭环 | 按卡片顺序逐项验证', '欢迎交流 | 有问题评论区一起聊']
   const parsed = rawLines.map(splitPipeParts)
 
   return `
     <div class="cd-header">
       <div class="cd-eyebrow-row">
-        <span class="cd-accent-pill" style="background:var(--xhs-accent); color:#FFFFFF; border:none;">${escapeHtml(cleanBadgeText(card.badge, 'PROMPTS · 抄作业清单'))}</span>
-        <span class="cd-eyebrow-sub" style="color:#A6ACCD;">${pageNo} / FINALE</span>
+        <span class="cd-accent-pill">${escapeHtml(cleanBadgeText(card.badge, '写在最后'))}</span>
+        <span class="cd-eyebrow-sub">${pageNo} / ${String(total).padStart(2, '0')}</span>
       </div>
-      <h2 class="cd-title" style="color:#FFFFFF; font-size:calc(62px * var(--xhs-scale, 1));">${escapeHtml(card.heading || '直接拿走用的行动清单')}</h2>
-      <p class="cd-sub" style="color:#A6ACCD;">${escapeHtml(card.accent || '以上步骤全部实测跑通，建议先收藏慢慢试')}</p>
+      <h2 class="cd-title" style="font-size:calc(60px * var(--xhs-scale, 1));">${highlightHeadingHtml(card.heading || '直接拿走用的行动清单')}</h2>
+      ${card.accent ? `<p class="cd-sub">${escapeHtml(card.accent)}</p>` : ''}
     </div>
 
     <div class="cd-main">
-      <div class="cd-step-list">
+      <div style="display:flex; flex-direction:column; flex:1; justify-content:center; border-top:1px solid var(--xhs-line);">
         ${parsed.map((parts, idx) => {
-          const title = parts[0] || `行动 0${idx + 1}`
-          const desc = parts.slice(1).join(' · ') || '照着执行即可复现同款效果'
+          const title = parts[0] || `要点 0${idx + 1}`
+          const desc = parts.slice(1).join(' · ')
           return `
-            <div class="cd-card" style="flex:1; background:#1C1E2A; border-color:#2E3247; justify-content:center; gap:8px;">
-              <div style="display:flex; align-items:center; justify-content:space-between;">
-                <span style="font-size:calc(27px * var(--xhs-scale, 1)); font-weight:900; color:#FFFFFF;">${escapeHtml(title)}</span>
-                <span class="cd-code-pill" style="background:#272A3A; color:#C9B8FC;">ACTION 0${idx + 1}</span>
+            <div style="display:grid; grid-template-columns:84px 1fr; gap:18px; align-items:baseline; padding:26px 4px; border-bottom:1px solid var(--xhs-line);">
+              <span style="font-family:var(--xhs-mono); font-size:32px; font-weight:800; color:var(--xhs-accent); line-height:1;">0${idx + 1}</span>
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <strong style="font-size:calc(29px * var(--xhs-scale, 1)); font-weight:900; color:var(--xhs-ink); line-height:1.3;">${escapeHtml(title)}</strong>
+                ${desc ? `<p style="margin:0; font-size:calc(23px * var(--xhs-scale, 1)); color:var(--xhs-ink2); line-height:1.48;">${escapeHtml(desc)}</p>` : ''}
               </div>
-              <p style="font-size:calc(23px * var(--xhs-scale, 1)); color:#A6ACCD; line-height:1.45;">${escapeHtml(desc)}</p>
             </div>
           `
         }).join('')}
       </div>
 
-      <div class="cd-dark-panel" style="background:var(--xhs-accent); border-radius:16px;">
-        <span class="cd-dark-panel-title" style="font-size:calc(26px * var(--xhs-scale, 1));">
-          ${escapeHtml(card.callout || '先收藏，跑通了欢迎回来交作业 →')}
-        </span>
-        <span class="cd-dark-panel-tag" style="background:rgba(0,0,0,0.22); color:#FFFFFF;">建议收藏</span>
-      </div>
+      ${card.callout ? `
+        <div class="cd-callout" style="background:var(--xhs-tint); border-color:var(--xhs-accent-line);">
+          <div class="cd-callout-line" style="color:var(--xhs-ink);">${escapeHtml(card.callout)}</div>
+        </div>
+      ` : ''}
     </div>
 
-    <div class="cd-footer" style="color:#7C82A4;">
+    <div class="cd-footer">
       <span>${escapeHtml(author ? `@${author}` : '全文完')}</span>
       <span>${index + 1} / ${total}</span>
     </div>
   `
 }
 
-export function resolveArtboardClassName(card) {
-  return card?.kind === 'end' ? 'xhs-artboard is-dark-artboard' : 'xhs-artboard'
+export function resolveArtboardClassName() {
+  return 'xhs-artboard'
 }
 
 export function buildCardStyleText({ customCss = '', pageCss = '' } = {}) {

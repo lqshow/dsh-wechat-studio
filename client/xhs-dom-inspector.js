@@ -352,6 +352,13 @@ export function applyElementMutation(rootEl, targetId, mutation) {
         mainArea.insertBefore(wrapper, mainArea.firstChild)
       }
     }
+  } else if (mutation.type === 'replace-image-src') {
+    const cleanUrl = sanitizeCardImageUrl(mutation.src)
+    const imgEl = (el.tagName === 'IMG' ? el : el.querySelector?.('img')) || rootEl.querySelector?.('img')
+    if (cleanUrl && imgEl) {
+      imgEl.setAttribute('src', cleanUrl)
+      if (mutation.framing) applyDomImageFraming(imgEl, mutation.framing)
+    }
   } else if (mutation.type === 'image-framing') {
     const imgEl = (el.tagName === 'IMG' ? el : el.querySelector?.('img')) || rootEl.querySelector?.('img')
     if (imgEl && mutation.framing) {

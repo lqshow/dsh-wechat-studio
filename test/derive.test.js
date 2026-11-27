@@ -1213,7 +1213,7 @@ test('小红书性能优化：阶段 2 并发池提速、按页切片 blocks、�
             const user = JSON.parse(messages[0].content[0].text)
             const page = user.targetCards[0].page
             stage2BlockCounts.set(page, user.blocks.map(b => b.id))
-            await new Promise(r => setTimeout(r, 35))
+            await new Promise(r => setTimeout(r, 90))
             activeStage2--
             const htmlMap = {
               1: '<xhs-card page="1"><div class="hero"><h1>并发提速实测</h1></div></xhs-card>',

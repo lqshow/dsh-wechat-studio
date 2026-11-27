@@ -61,6 +61,14 @@ import {
   readElementInspectorState,
   serializeArtboardHtml,
 } from './xhs-dom-inspector.js'
+import {
+  CROP_ASPECT_PRESETS,
+  DEFAULT_CROP_RECT,
+  cropRectToPixels,
+  fitCropToAspect,
+  moveCropRect,
+  resizeCropRect,
+} from './xhs-image-crop.js'
 import { createZip } from './zip.js'
 
 const SUB_TABS = [
@@ -472,13 +480,444 @@ function renderLayerTreeNodes(node, selectedElId, onSelect, collapsedIds, onTogg
 }
 
 const DESIGN_PROMPT_CHIPS = [
-  { label: '自由发挥（按内容定制）', value: '' },
-  { label: '编辑部杂志画报', value: '杂志画报风：克制留白、衬线大标题、不对称双栏与大号金句页' },
-  { label: '工程实测报告', value: '工程实测报告风：对照表、指标仪表盘、代码终端窗与紧凑 Bento 矩阵' },
-  { label: '工业工具说明书', value: '工业工具说明书风：巨型步骤编号、醒目标签、输入输出公式与规格参数栏' },
-  { label: '红笔手账备课本', value: '手账备课本风：笔记线条质感、圈画重点批注、微倾提醒便签与步骤清单' },
-  { label: '极简瑞士海报网格', value: '瑞士海报网格风：粗黑分割线、高对比巨型数字与模块化信息块' },
+  {
+    id: 'auto',
+    label: '自由发挥',
+    tagline: 'AI 按文章题材定制',
+    value: '',
+  },
+  {
+    id: 'swiss',
+    label: '瑞士大字报 + 荧光笔',
+    tagline: '巨型锚点 · 荧光笔圈注',
+    value: '瑞士海报网格 × 编辑部荧光笔批注：每页只保留 1 个超大视觉锚点（巨型数字、超大关键词或对比结论），其余信息用开放式无边框条列自然展开；用内联 SVG 手绘荧光笔下划线、圆圈标注和极简箭头引导视线，绝不堆砌圆角白卡片和假仪表盘标签；尾页用浅色便签纸风格收尾。',
+  },
+  {
+    id: 'newyorker',
+    label: '复古科技报纸 / 纽约客',
+    tagline: '双线刊头 · 首字下沉 · 分栏',
+    value: '像《纽约客》特稿混搭早期苹果印刷广告：报纸分栏细线、顶部刊头日期与栏号、大幅呼吸留白、重点句用大号拉出引言（Pull Quote）加粗下划线强调；数据用极简横向条形图而非仪表盘方块；整体克制冷静、图文疏朗，尾页用「专栏结语 + 行动建议」浅底双栏收束。',
+  },
+  {
+    id: 'monocle',
+    label: 'Monocle 日系杂志',
+    tagline: '暖纸留白 · 竖排眉批 · 大页码',
+    value: '像《Monocle》或《知日》编辑部专题：大面积暖纸留白、粗细反差强烈的衬线标题与无衬线正文、用极细 1px 分割线和超大淡色页码取代圆角方框；穿插左侧竖排小字眉批、非对称 1:2 栏宽和极简内联 SVG 比例条；尾页用浅暖纸「编者按 / 书信」式收尾，绝不用黑底。',
+  },
+  {
+    id: 'manual',
+    label: '工业工具说明书',
+    tagline: 'UNIT 标签 · 巨型编号 · I/O',
+    value: '工业工具说明书风：巨型步骤编号、醒目标签、输入输出公式与规格参数栏',
+  },
+  {
+    id: 'notebook',
+    label: '红笔手账备课本',
+    tagline: '横线稿纸 · 微倾便签 · 勾选单',
+    value: '手账备课本风：笔记线条质感、圈画重点批注、微倾提醒便签与步骤清单',
+  },
+  {
+    id: 'tech',
+    label: '工程实测报告',
+    tagline: '终端日志 · 比例条 · 实测账本',
+    value: '工程实测报告风：对照表、指标仪表盘、代码终端窗与紧凑 Bento 矩阵',
+  },
+  {
+    id: 'editorial',
+    label: '编辑部杂志画报',
+    tagline: '衬线大标题 · 留白金句',
+    value: '杂志画报风：克制留白、衬线大标题、不对称双栏与大号金句页',
+  },
 ]
+
+function StyleTemplateThumbnail({ id }) {
+  switch (id) {
+    case 'swiss':
+      return (
+        <svg viewBox="0 0 90 120" className="ws-style-thumb-svg" aria-hidden="true">
+          <rect width="90" height="120" fill="#FAF9F5" />
+          <rect x="8" y="10" width="74" height="2.2" fill="#18181B" />
+          <text x="8" y="34" fontSize="20" fontWeight="900" fill="#18181B" fontFamily="system-ui">03</text>
+          <rect x="38" y="21" width="38" height="7" rx="1" fill="#FACC15" opacity="0.6" />
+          <rect x="38" y="19" width="42" height="4" rx="1" fill="#18181B" />
+          <ellipse cx="21" cy="27" rx="14" ry="10" fill="none" stroke="#C9643E" strokeWidth="1.6" />
+          <line x1="8" y1="43" x2="82" y2="43" stroke="#E4E1D8" strokeWidth="1" />
+          <rect x="8" y="50" width="33" height="3.5" fill="#18181B" />
+          <rect x="8" y="57" width="30" height="2.2" fill="#9A968E" />
+          <rect x="8" y="62" width="26" height="2.2" fill="#9A968E" />
+          <rect x="49" y="50" width="33" height="3.5" fill="#18181B" />
+          <rect x="49" y="57" width="28" height="2.2" fill="#9A968E" />
+          <rect x="49" y="62" width="31" height="2.2" fill="#9A968E" />
+          <line x1="8" y1="73" x2="82" y2="73" stroke="#E4E1D8" strokeWidth="1" />
+          <rect x="8" y="80" width="74" height="20" fill="#F7EFE4" />
+          <rect x="8" y="80" width="3" height="20" fill="#C9643E" />
+          <rect x="16" y="86" width="52" height="3" fill="#18181B" />
+          <rect x="16" y="92" width="38" height="2.2" fill="#78716C" />
+          <line x1="8" y1="109" x2="82" y2="109" stroke="#E4E1D8" strokeWidth="0.8" />
+        </svg>
+      )
+    case 'newyorker':
+      return (
+        <svg viewBox="0 0 90 120" className="ws-style-thumb-svg" aria-hidden="true">
+          <rect width="90" height="120" fill="#FBF9F4" />
+          <rect x="8" y="9" width="74" height="2" fill="#1C1917" />
+          <rect x="8" y="16" width="74" height="0.8" fill="#1C1917" />
+          <rect x="8" y="12.2" width="24" height="2" fill="#78716C" />
+          <rect x="64" y="12.2" width="18" height="2" fill="#78716C" />
+          <rect x="8" y="22" width="22" height="2.2" fill="#C9643E" />
+          <rect x="8" y="27" width="66" height="5.5" fill="#1C1917" />
+          <rect x="8" y="35" width="48" height="4.5" fill="#1C1917" />
+          <line x1="8" y1="44" x2="82" y2="44" stroke="#1C1917" strokeWidth="1" />
+          <rect x="8" y="50" width="11" height="13" fill="#1C1917" />
+          <rect x="22" y="51" width="19" height="2.2" fill="#78716C" />
+          <rect x="22" y="56" width="17" height="2.2" fill="#78716C" />
+          <rect x="22" y="61" width="18" height="2.2" fill="#78716C" />
+          <rect x="8" y="67" width="33" height="2.2" fill="#78716C" />
+          <rect x="8" y="72" width="29" height="2.2" fill="#78716C" />
+          <line x1="45" y1="49" x2="45" y2="103" stroke="#DDD6C7" strokeWidth="1" />
+          <rect x="50" y="50" width="32" height="24" fill="#EFECE4" stroke="#D6CFC2" strokeWidth="0.8" />
+          <rect x="54" y="55" width="24" height="12" fill="#C9643E" opacity="0.22" />
+          <rect x="50" y="79" width="30" height="2.8" fill="#1C1917" />
+          <line x1="50" y1="84" x2="80" y2="84" stroke="#C9643E" strokeWidth="1.4" />
+          <rect x="50" y="89" width="32" height="4" fill="#EAE4D7" />
+          <rect x="50" y="89" width="24" height="4" fill="#C9643E" />
+          <line x1="8" y1="108" x2="82" y2="108" stroke="#DDD6C7" strokeWidth="0.8" />
+          <rect x="78" y="111" width="4" height="4" fill="#1C1917" />
+        </svg>
+      )
+    case 'monocle':
+      return (
+        <svg viewBox="0 0 90 120" className="ws-style-thumb-svg" aria-hidden="true">
+          <rect width="90" height="120" fill="#FBF7F0" />
+          <line x1="8" y1="14" x2="82" y2="14" stroke="#E5DDD0" strokeWidth="0.9" />
+          <text x="60" y="38" fontSize="22" fontFamily="Georgia, serif" fill="#E3D9C8">02</text>
+          <rect x="8" y="21" width="40" height="4.5" fill="#1C1917" />
+          <rect x="8" y="28" width="32" height="4" fill="#1C1917" />
+          <line x1="18" y1="44" x2="18" y2="104" stroke="#E5DDD0" strokeWidth="0.9" />
+          <rect x="11" y="48" width="2.2" height="24" fill="#B5AA99" />
+          <rect x="25" y="47" width="57" height="0.9" fill="#E5DDD0" />
+          <rect x="25" y="53" width="16" height="2.4" fill="#C9643E" />
+          <rect x="46" y="53" width="34" height="2.8" fill="#1C1917" />
+          <rect x="46" y="59" width="30" height="2" fill="#8C8376" />
+          <rect x="25" y="69" width="57" height="0.9" fill="#E5DDD0" />
+          <rect x="25" y="75" width="16" height="2.4" fill="#C9643E" />
+          <rect x="46" y="75" width="32" height="2.8" fill="#1C1917" />
+          <rect x="46" y="81" width="28" height="2" fill="#8C8376" />
+          <rect x="25" y="91" width="57" height="14" fill="#FFFFFF" stroke="#E5DDD0" strokeWidth="0.8" />
+          <rect x="30" y="96" width="44" height="2.4" fill="#1C1917" />
+        </svg>
+      )
+    case 'manual':
+      return (
+        <svg viewBox="0 0 90 120" className="ws-style-thumb-svg" aria-hidden="true">
+          <rect width="90" height="120" fill="#F8FAFC" />
+          <rect x="8" y="9" width="28" height="8" fill="#0F172A" />
+          <rect x="12" y="12" width="18" height="2" fill="#FFFFFF" />
+          <rect x="64" y="11" width="18" height="3" fill="#94A3B8" />
+          <line x1="8" y1="21" x2="82" y2="21" stroke="#0F172A" strokeWidth="1.6" />
+          <text x="8" y="45" fontSize="22" fontWeight="900" fill="#2563EB" fontFamily="monospace">01</text>
+          <rect x="39" y="29" width="42" height="4.5" fill="#0F172A" />
+          <rect x="39" y="36" width="32" height="3" fill="#64748B" />
+          <rect x="8" y="53" width="74" height="16" fill="#0F172A" />
+          <rect x="12" y="57" width="18" height="2.4" fill="#60A5FA" />
+          <rect x="36" y="57" width="18" height="2.4" fill="#60A5FA" />
+          <rect x="60" y="57" width="18" height="2.4" fill="#60A5FA" />
+          <rect x="12" y="62" width="15" height="2" fill="#CBD5E1" />
+          <rect x="36" y="62" width="16" height="2" fill="#CBD5E1" />
+          <rect x="60" y="62" width="15" height="2" fill="#CBD5E1" />
+          <line x1="8" y1="77" x2="82" y2="77" stroke="#CBD5E1" strokeWidth="0.9" />
+          <rect x="8" y="81" width="20" height="2.5" fill="#2563EB" />
+          <rect x="33" y="81" width="46" height="2.5" fill="#334155" />
+          <line x1="8" y1="89" x2="82" y2="89" stroke="#CBD5E1" strokeWidth="0.9" />
+          <rect x="8" y="96" width="74" height="15" fill="#0F172A" />
+          <line x1="8" y1="96" x2="82" y2="96" stroke="#FFFFFF" strokeWidth="1" strokeDasharray="3 2" />
+          <rect x="14" y="102" width="44" height="2.6" fill="#FFFFFF" />
+        </svg>
+      )
+    case 'notebook':
+      return (
+        <svg viewBox="0 0 90 120" className="ws-style-thumb-svg" aria-hidden="true">
+          <rect width="90" height="120" fill="#FDFBF7" />
+          {[22, 34, 46, 58, 70, 82, 94, 106].map(y => (
+            <line key={y} x1="0" y1={y} x2="90" y2={y} stroke="#ECE7DC" strokeWidth="0.8" />
+          ))}
+          <line x1="16" y1="0" x2="16" y2="120" stroke="#E09A84" strokeWidth="1.2" />
+          <rect x="22" y="13" width="42" height="5" fill="#1C1917" />
+          <rect x="22" y="21" width="32" height="4" fill="#2563EB" opacity="0.22" />
+          <rect x="62" y="10" width="20" height="9" fill="#FFFFFF" stroke="#2563EB" strokeWidth="1" transform="rotate(-3 72 14)" />
+          <rect x="22" y="38" width="54" height="3" fill="#44403C" />
+          <rect x="22" y="50" width="48" height="3" fill="#44403C" />
+          <g transform="rotate(-2 50 76)">
+            <rect x="24" y="64" width="54" height="24" fill="#EEF4FF" stroke="#93C5FD" strokeWidth="0.9" />
+            <rect x="30" y="70" width="36" height="3" fill="#1E3A8A" />
+            <rect x="30" y="77" width="28" height="2.4" fill="#475569" />
+          </g>
+          <rect x="22" y="98" width="6" height="6" rx="1" fill="#2563EB" />
+          <rect x="32" y="99.5" width="40" height="3" fill="#1C1917" />
+        </svg>
+      )
+    case 'tech':
+      return (
+        <svg viewBox="0 0 90 120" className="ws-style-thumb-svg" aria-hidden="true">
+          <rect width="90" height="120" fill="#F8FAFC" />
+          <rect x="8" y="12" width="24" height="3" fill="#2563EB" />
+          <rect x="8" y="19" width="58" height="5.5" fill="#0F172A" />
+          <rect x="8" y="31" width="74" height="40" rx="4" fill="#111827" />
+          <circle cx="15" cy="37" r="1.8" fill="#EF4444" />
+          <circle cx="21" cy="37" r="1.8" fill="#F59E0B" />
+          <circle cx="27" cy="37" r="1.8" fill="#22C55E" />
+          <rect x="14" y="45" width="46" height="2.5" fill="#93C5FD" />
+          <rect x="14" y="52" width="58" height="2.2" fill="#94A3B8" />
+          <rect x="14" y="58" width="40" height="2.2" fill="#94A3B8" />
+          <rect x="8" y="79" width="74" height="5" rx="2" fill="#E2E8F0" />
+          <rect x="8" y="79" width="56" height="5" rx="2" fill="#2563EB" />
+          <rect x="8" y="89" width="74" height="5" rx="2" fill="#E2E8F0" />
+          <rect x="8" y="89" width="42" height="5" rx="2" fill="#0F172A" />
+          <line x1="8" y1="106" x2="82" y2="106" stroke="#E2E8F0" strokeWidth="1" />
+        </svg>
+      )
+    case 'editorial':
+      return (
+        <svg viewBox="0 0 90 120" className="ws-style-thumb-svg" aria-hidden="true">
+          <rect width="90" height="120" fill="#FAF8F5" />
+          <rect x="8" y="14" width="24" height="2.4" fill="#C9643E" />
+          <text x="12" y="48" fontSize="28" fontFamily="Georgia, serif" fill="#C9643E" opacity="0.35">“</text>
+          <rect x="14" y="46" width="62" height="5" fill="#18181B" />
+          <rect x="14" y="55" width="54" height="5" fill="#18181B" />
+          <rect x="14" y="64" width="38" height="5" fill="#C9643E" />
+          <line x1="14" y1="80" x2="76" y2="80" stroke="#E4DDD3" strokeWidth="1" />
+          <rect x="14" y="87" width="26" height="2.6" fill="#18181B" />
+          <rect x="14" y="93" width="24" height="2" fill="#8C8376" />
+          <rect x="48" y="87" width="28" height="2.6" fill="#18181B" />
+          <rect x="48" y="93" width="24" height="2" fill="#8C8376" />
+        </svg>
+      )
+    default:
+      return (
+        <svg viewBox="0 0 90 120" className="ws-style-thumb-svg" aria-hidden="true">
+          <rect width="90" height="120" fill="#FAF8FF" />
+          <rect x="10" y="14" width="44" height="5" rx="2" fill="#6D3BF2" opacity="0.85" />
+          <rect x="10" y="23" width="66" height="3" rx="1.5" fill="#CBD5E1" />
+          <rect x="10" y="34" width="32" height="34" rx="4" fill="#EDE9FE" />
+          <rect x="48" y="34" width="32" height="15" rx="4" fill="#FEF3C7" />
+          <rect x="48" y="53" width="32" height="15" rx="4" fill="#DBEAFE" />
+          <rect x="10" y="74" width="70" height="22" rx="4" fill="#FFFFFF" stroke="#E2E8F0" strokeWidth="1" />
+          <text x="45" y="89" textAnchor="middle" fontSize="11" fontWeight="700" fill="#6D3BF2">✦ AI 定制</text>
+          <rect x="10" y="104" width="30" height="2.5" rx="1" fill="#CBD5E1" />
+        </svg>
+      )
+  }
+}
+
+const CROP_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
+
+function XhsImageCropModal({ src, onCancel, onApply }) {
+  const stageRef = React.useRef(null)
+  const imgRef = React.useRef(null)
+  const [naturalSize, setNaturalSize] = React.useState({ w: 0, h: 0 })
+  const [aspectId, setAspectId] = React.useState('free')
+  const [cropRect, setCropRect] = React.useState(DEFAULT_CROP_RECT)
+  const [error, setError] = React.useState('')
+  const [applying, setApplying] = React.useState(false)
+
+  const activePreset = CROP_ASPECT_PRESETS.find(p => p.id === aspectId) || CROP_ASPECT_PRESETS[0]
+
+  React.useEffect(() => {
+    const onKeyDown = e => {
+      if (e.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onCancel])
+
+  const handleImageLoad = e => {
+    const el = e.currentTarget
+    setNaturalSize({ w: el.naturalWidth || el.width || 1, h: el.naturalHeight || el.height || 1 })
+    setError('')
+  }
+
+  const selectAspect = nextId => {
+    setAspectId(nextId)
+    const preset = CROP_ASPECT_PRESETS.find(p => p.id === nextId)
+    if (preset?.ratio && naturalSize.w && naturalSize.h) {
+      setCropRect(prev => fitCropToAspect(prev, preset.ratio, naturalSize.w, naturalSize.h))
+    }
+  }
+
+  const startDrag = (mode, handle, event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const stageEl = stageRef.current
+    if (!stageEl) return
+    const bounds = stageEl.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return
+
+    const startX = event.clientX
+    const startY = event.clientY
+    const startRect = cropRect
+    const aspectRatio = activePreset.ratio
+
+    const onMouseMove = moveEv => {
+      const dx = (moveEv.clientX - startX) / bounds.width
+      const dy = (moveEv.clientY - startY) / bounds.height
+      if (mode === 'move') {
+        setCropRect(moveCropRect(startRect, dx, dy))
+      } else {
+        setCropRect(resizeCropRect(startRect, handle, dx, dy, {
+          aspectRatio,
+          naturalWidth: naturalSize.w || 1,
+          naturalHeight: naturalSize.h || 1,
+        }))
+      }
+    }
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+  }
+
+  const pixelRect = naturalSize.w > 0 ? cropRectToPixels(cropRect, naturalSize.w, naturalSize.h) : null
+
+  const confirmCrop = () => {
+    const imgEl = imgRef.current
+    if (!imgEl || !naturalSize.w || !naturalSize.h || !pixelRect) return
+    setApplying(true)
+    setError('')
+    try {
+      const { sx, sy, sw, sh } = pixelRect
+      const scale = Math.min(1, 1080 / sw, 1440 / sh)
+      const outW = Math.max(1, Math.round(sw * scale))
+      const outH = Math.max(1, Math.round(sh * scale))
+      const canvas = document.createElement('canvas')
+      canvas.width = outW
+      canvas.height = outH
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('浏览器不支持画布剪裁')
+      ctx.drawImage(imgEl, sx, sy, sw, sh, 0, 0, outW, outH)
+
+      let dataUrl = canvas.toDataURL('image/png')
+      if (dataUrl.length > 750_000) {
+        const jpgCanvas = document.createElement('canvas')
+        jpgCanvas.width = outW
+        jpgCanvas.height = outH
+        const jpgCtx = jpgCanvas.getContext('2d')
+        jpgCtx.fillStyle = '#FFFFFF'
+        jpgCtx.fillRect(0, 0, outW, outH)
+        jpgCtx.drawImage(canvas, 0, 0)
+        for (const q of [0.9, 0.8, 0.68]) {
+          dataUrl = jpgCanvas.toDataURL('image/jpeg', q)
+          if (dataUrl.length <= 750_000) break
+        }
+      }
+      onApply(dataUrl)
+    } catch (err) {
+      const isCorsError = err?.name === 'SecurityError' || /tainted|cross-origin/i.test(err?.message || '')
+      const msg = isCorsError
+        ? '该外部图片因跨域限制无法像素剪裁；请下载后点「上传本地截图」再剪裁，或使用右侧的构图缩放调节。'
+        : (err?.message || '剪裁图片失败，请重试')
+      setError(msg)
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <div className="ws-scrim" role="presentation" onClick={e => { if (e.target === e.currentTarget) onCancel() }}>
+      <div className="ws-dialog ws-crop-dialog" role="dialog" aria-modal="true" aria-label="剪裁卡片图片">
+        <div className="ws-dialog-head">
+          <strong className="ws-dialog-title">✂️ 剪裁图片</strong>
+          <span className="ws-muted ws-small">
+            {pixelRect ? `选区尺寸：${pixelRect.sw} × ${pixelRect.sh} px（原图 ${naturalSize.w} × ${naturalSize.h}）` : '正在加载图片…'}
+          </span>
+          <button type="button" className="ws-btn" onClick={onCancel}>关闭</button>
+        </div>
+
+        <div className="ws-crop-toolbar">
+          <div className="ws-chips" role="group" aria-label="剪裁比例">
+            {CROP_ASPECT_PRESETS.map(p => (
+              <button
+                key={p.id}
+                type="button"
+                className={aspectId === p.id ? 'is-on' : ''}
+                onClick={() => selectAspect(p.id)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="ws-btn"
+            onClick={() => {
+              setAspectId('free')
+              setCropRect(DEFAULT_CROP_RECT)
+            }}
+          >
+            重置选区
+          </button>
+        </div>
+
+        {error ? <div className="ws-banner is-error"><span>{error}</span></div> : null}
+
+        <div className="ws-crop-canvas-wrap">
+          <div ref={stageRef} className="ws-crop-stage">
+            <img
+              ref={imgRef}
+              src={src}
+              alt="待剪裁图片"
+              crossOrigin={/^https?:\/\//i.test(src) ? 'anonymous' : undefined}
+              draggable={false}
+              onLoad={handleImageLoad}
+              onError={() => setError('图片加载失败，无法剪裁。')}
+            />
+            {naturalSize.w > 0 ? (
+              <div
+                className="ws-crop-box"
+                style={{
+                  left: `${cropRect.x * 100}%`,
+                  top: `${cropRect.y * 100}%`,
+                  width: `${cropRect.w * 100}%`,
+                  height: `${cropRect.h * 100}%`,
+                }}
+                onMouseDown={e => startDrag('move', '', e)}
+              >
+                <div className="ws-crop-grid" aria-hidden="true">
+                  <span className="ws-crop-grid-v1" />
+                  <span className="ws-crop-grid-v2" />
+                  <span className="ws-crop-grid-h1" />
+                  <span className="ws-crop-grid-h2" />
+                </div>
+                {CROP_HANDLES.map(h => (
+                  <span
+                    key={h}
+                    className={`ws-crop-handle is-${h}`}
+                    onMouseDown={e => startDrag('resize', h, e)}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="ws-dialog-foot">
+          <span className="ws-muted ws-small">拖动选区移动位置，拖动四角或边缘调整剪裁范围</span>
+          <span className="ws-grow" />
+          <button type="button" className="ws-btn" onClick={onCancel}>取消</button>
+          <button
+            type="button"
+            className="ws-btn is-primary"
+            disabled={!pixelRect || applying}
+            onClick={confirmCrop}
+          >
+            {applying ? '剪裁中…' : '应用剪裁'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function resolveShadowTarget(event, rootEl) {
   const path = event?.nativeEvent?.composedPath?.() || []
@@ -579,6 +1018,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
   const [redesignConfirm, setRedesignConfirm] = React.useState(null)
   const [pendingRedesignOffer, setPendingRedesignOffer] = React.useState(null)
   const [lightboxIndex, setLightboxIndex] = React.useState(null)
+  const [cropImageSrc, setCropImageSrc] = React.useState('')
   const errorOnExit = React.useMemo(() => ({ articleId: article.id, text: null }), [article.id])
   React.useLayoutEffect(() => {
     errorOnExit.text = article.xhsError
@@ -646,6 +1086,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
     setPendingRedesignOffer(null)
     setDesignPrompt(record?.payload?.designPrompt || '')
     setLightboxIndex(null)
+    setCropImageSrc('')
   }, [article.id])
 
   React.useEffect(() => () => dismissXhsError(errorOnExit.articleId, errorOnExit.text), [errorOnExit])
@@ -1461,39 +1902,46 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
           </div>
         </div>
       ) : null}
-      <div className="ws-cd-prompt-chips">
+      <div className="ws-style-gallery" role="radiogroup" aria-label="小红书视觉风格模板">
         {DESIGN_PROMPT_CHIPS.map(chip => {
           const active = designPrompt.trim() === chip.value
           return (
             <button
-              key={chip.label}
+              key={chip.id}
               type="button"
-              className={`ws-cd-prompt-chip ${active ? 'is-on' : ''}`}
+              role="radio"
+              aria-checked={active}
+              className={`ws-style-card ${active ? 'is-on' : ''}`}
               disabled={busy || archived}
               onClick={() => setDesignPrompt(chip.value)}
             >
-              {chip.label}
+              <div className="ws-style-thumb-frame">
+                <StyleTemplateThumbnail id={chip.id} />
+                {active ? <span className="ws-style-thumb-check">✓</span> : null}
+              </div>
+              <span className="ws-style-card-title">{chip.label}</span>
+              <span className="ws-style-card-sub">{chip.tagline}</span>
             </button>
           )
         })}
-        {showRegenerate ? (
-          <>
-            <span className="ws-grow" />
-            <button
-              type="button"
-              className="ws-btn is-primary"
-              style={{ fontSize: '12px', padding: '5px 12px' }}
-              disabled={busy || archived}
-              onClick={() => {
-                setPromptPopoverOpen(false)
-                onGenerate('xhs', undefined, { dirty, record, designPrompt, referenceImages: deckRefImages })
-              }}
-            >
-              ✨ 按此想法重新生成
-            </button>
-          </>
-        ) : null}
       </div>
+      {showRegenerate ? (
+        <div className="ws-cd-prompt-chips">
+          <span className="ws-grow" />
+          <button
+            type="button"
+            className="ws-btn is-primary"
+            style={{ fontSize: '12px', padding: '5px 12px' }}
+            disabled={busy || archived}
+            onClick={() => {
+              setPromptPopoverOpen(false)
+              onGenerate('xhs', undefined, { dirty, record, designPrompt, referenceImages: deckRefImages })
+            }}
+          >
+            ✨ 按此想法重新生成
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 
@@ -2663,6 +3111,7 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                     </div>
 
                     {selectedCard.imageUrl || inspector?.imageSrc ? (() => {
+                      const activeImageSrc = inspector?.imageSrc || selectedCard.imageUrl || ''
                       const activeFraming = inspector?.imageFraming || selectedCard.imageFraming || {
                         fit: 'cover',
                         posX: 50,
@@ -2674,14 +3123,26 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px', paddingTop: '10px', borderTop: '1px dashed var(--line)' }}>
                           <div className="ws-cd-sec-head">
-                            <span>插图构图与位置微调</span>
-                            <button
-                              type="button"
-                              className="ws-link"
-                              onClick={() => updateCardImageFraming({ fit: 'cover', posX: 50, posY: 50, zoom: 100, panX: 0, panY: 0 })}
-                            >
-                              重置居中
-                            </button>
+                            <span>插图构图与剪裁</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              {activeImageSrc ? (
+                                <button
+                                  type="button"
+                                  className="ws-btn is-primary"
+                                  style={{ fontSize: '11px', padding: '2px 9px', minHeight: '24px' }}
+                                  onClick={() => setCropImageSrc(activeImageSrc)}
+                                >
+                                  ✂️ 剪裁图片
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ws-link"
+                                onClick={() => updateCardImageFraming({ fit: 'cover', posX: 50, posY: 50, zoom: 100, panX: 0, panY: 0 })}
+                              >
+                                重置居中
+                              </button>
+                            </div>
                           </div>
 
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
@@ -3365,6 +3826,30 @@ function XhsPanel({ article, brand, pending, onGenerate, onDelete }) {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {cropImageSrc ? (
+        <XhsImageCropModal
+          src={cropImageSrc}
+          onCancel={() => setCropImageSrc('')}
+          onApply={croppedDataUrl => {
+            const resetFraming = { fit: 'cover', posX: 50, posY: 50, zoom: 100, panX: 0, panY: 0 }
+            const rootEl = artboardRefs.current[safeSelected]
+            if (rootEl) {
+              annotateArtboardDom(rootEl)
+              const nextHtml = applyElementMutation(rootEl, selectedElId, {
+                type: 'replace-image-src',
+                src: croppedDataUrl,
+                framing: resetFraming,
+              })
+              updateCard(safeSelected, { imageUrl: croppedDataUrl, imageFraming: resetFraming, html: nextHtml })
+            } else if (selectedCard) {
+              rebuildCardHtml(safeSelected, { ...selectedCard, imageUrl: croppedDataUrl, imageFraming: resetFraming })
+            }
+            setCropImageSrc('')
+            toast('已应用剪裁后的图片')
+          }}
+        />
       ) : null}
     </section>
   )

@@ -24,7 +24,7 @@ export const DERIVE_LIMITS = {
     callout: 48,
     cardTags: [0, 4],
     cardTagChars: 12,
-    cardHtml: 6000,
+    cardHtml: 9000,
     pageCss: 4000,
     customCss: 4000,
     totalDeckMarkup: 48000,
@@ -1288,6 +1288,27 @@ export function normalizeXhs(raw, { blockIds = [], sourceText = '', status = 502
   if (tweaks) out.tweaks = tweaks
   if (customCss) out.customCss = customCss
   if (designPrompt) out.designPrompt = designPrompt
+  if (raw.artDirection && typeof raw.artDirection === 'object') {
+    const cleanField = (val, maxLen) => (
+      typeof val === 'string'
+        ? val.replace(CONTROL_CHARS, '').replace(/[\r\n]+/g, ' ').trim().slice(0, maxLen)
+        : ''
+    )
+    const genre = cleanField(raw.artDirection.genre, 48)
+    const visualLanguage = cleanField(raw.artDirection.visualLanguage, 160)
+    const rhythm = cleanField(raw.artDirection.rhythm, 160)
+    const endMood = ['light', 'tint', 'split', 'dark'].includes(raw.artDirection.endMood)
+      ? raw.artDirection.endMood
+      : ''
+    if (genre || visualLanguage || rhythm || endMood) {
+      out.artDirection = {
+        ...(genre ? { genre } : {}),
+        ...(visualLanguage ? { visualLanguage } : {}),
+        ...(rhythm ? { rhythm } : {}),
+        ...(endMood ? { endMood } : {}),
+      }
+    }
+  }
   const referencePlan = normalizeXhsReferencePlan(raw.referencePlan, {
     cards: raw.cards,
     referenceImageIds,

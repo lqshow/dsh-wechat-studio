@@ -25,6 +25,7 @@ import {
 import { feishuImageUrls, markdownImageDestinations } from './markdown-images.js'
 import { readSettings } from './settings.js'
 import { readStyleState } from './writing-style.js'
+import { resolveXhsStyleKit } from './xhs-style-kits.js'
 
 const MAX_DERIVE_INPUT_CHARS = 30_000
 const XHS_BLUEPRINT_MAX_TOKENS = 6144
@@ -134,13 +135,14 @@ function platformContractSection(platform, variant) {
 
   const xhs = DERIVE_LIMITS.xhs
   return [
-    '# 输出格式与约束（阶段 1：整套策划 + 笔记文案 + 整套视觉样式）',
-    `风格（deckStyle）：可选 ${XHS_DECK_STYLES.join(' | ')}（默认 tech）；配色主题（tweaks.preset）仅决定色彩变量，可选 ${XHS_STYLE_PRESETS.join(' | ')}（默认 claude）。`,
+    '# 输出格式与约束（阶段 1：一文一格艺术方向 + 整套策划 + 笔记文案）',
+    `风格（deckStyle）：可选 ${XHS_DECK_STYLES.join(' | ')}（按文章气质选择：杂志随笔/深度复盘优先 editorial，技术工程优先 tech，强观点海报优先 bold）；配色主题（tweaks.preset）仅决定色彩变量，可选 ${XHS_STYLE_PRESETS.join(' | ')}（按文章情绪匹配，不必总是 claude）。`,
+    '艺术方向（artDirection，必填）：根据文章题材与情绪定制专属视觉语言，包含 genre（视觉体裁）、visualLanguage（排版骨相与去方框手法）、rhythm（全套页面视觉起承转合）、endMood（尾页色调：light | tint | split | dark，非硬核极客题材默认选 light / tint / split，禁止一律暗黑尾页）。',
     `标题（title）：1–${xhs.title} 字，不要带 # 号和换行。`,
     `正文（body）：${xhs.body[0]}–${xhs.body[1]} 字（建议控制在 300–700 字之间，切勿超过 850 字）。`,
     `标签（tags）：${xhs.tags[0]}–${xhs.tags[1]} 个字符串，不带 # 号，每个不超过 ${xhs.tagChars} 字。`,
     `卡片（cards）：${xhs.cards[0]}–${xhs.cards[1]} 页；可用卡型：${XHS_CARD_KINDS.join('、')}。`,
-    '- 相邻两页不要使用相同的 kind，且每一页必须规划互不相同的 layoutArchetype（例如 editorial-hero-window、comparison-table-bento、numbered-timeline-track、kpi-dashboard-grid、asymmetric-bento-quad、checklist-cards、magazine-pullquote、dark-action-finale）。',
+    '- 相邻两页不要使用相同的 kind，且每一页必须规划互不相同的 layoutArchetype（按文章气质自由命名，例如 editorial-magazine-hero、open-hairline-steps、asymmetric-split-compare、minimal-svg-metrics、vertical-rail-pullquote、annotated-checklist、light-letter-finale、tinted-note-finale）。',
     `- 所有 heading 不超过 ${xhs.heading} 字（建议 12 字以内），badge ≤ ${xhs.badge} 字，accent ≤ ${xhs.accent} 字，callout ≤ ${xhs.callout} 字，tags 0–4 个。`,
     `- 第 1 页必须是 cover：heading 必填，lines ${xhs.cover.lines[0]}–${xhs.cover.lines[1]} 行，每行 ≤ ${xhs.cover.lineChars} 字。`,
     `- 中间页可选 compare / steps / metrics / grid / list / quote：compare（${xhs.compare.lines[0]}–${xhs.compare.lines[1]} 行，≤ ${xhs.compare.lineChars} 字）、steps（${xhs.steps.lines[0]}–${xhs.steps.lines[1]} 行，≤ ${xhs.steps.lineChars} 字）、metrics（${xhs.metrics.lines[0]}–${xhs.metrics.lines[1]} 行，≤ ${xhs.metrics.lineChars} 字）、grid（${xhs.grid.lines[0]}–${xhs.grid.lines[1]} 行，≤ ${xhs.grid.lineChars} 字）、list（${xhs.list.lines[0]}–${xhs.list.lines[1]} 行，≤ ${xhs.list.lineChars} 字）均需填写 heading；quote（${xhs.quote.lines[0]}–${xhs.quote.lines[1]} 行，≤ ${xhs.quote.lineChars} 字，优先原句）的 heading 可选。`,
@@ -149,9 +151,9 @@ function platformContractSection(platform, variant) {
     '- 若 user payload 携带 referenceImageIds，必须同时输出 referencePlan：images 记录每张有效图片的 id、role（cover | content | style）与简短 reason；sharedImageIds 最多 1 个且只能是 style；pages 只列出有专属参考图的页面，每页去重后最多 2 个 ID。',
     '- cover 图只能分配给第 1 页，content 图不能分配给封面；参考图可跨页复用，未分配页面自由设计，不要求每张图都使用。不得编造 referenceImageIds 之外的图片 ID。',
     '- referencePlan 只写 ID、角色、理由和页码，不得写入 Base64、Data URL 或其他图片数据。',
-    '- 本阶段请返回 <xhs-meta>...</xhs-meta>（严格合法 JSON，cards 中不要塞入 html 字段，下一步会并行精绘每页自由 HTML）以及可选的 <xhs-style>...</xhs-style>（仅放跨页共享的精简公共类，建议 ≤ 1200 字符、上限 4000 字符，如内置 .cd-* 类已足够可直接省略；所有主色必须使用 var(--xhs-*) 变量）。',
+    '- 本阶段请返回 <xhs-meta>...</xhs-meta>（严格合法 JSON，cards 中不要塞入 html 字段，下一步会并行精绘每页自由 HTML）以及可选的 <xhs-style>...</xhs-style>（仅放跨页共享的精简公共类，建议 ≤ 1200 字符、上限 4000 字符，如不需要可直接省略；所有主色必须使用 var(--xhs-*) 变量）。',
     '输出格式示例：',
-    '<xhs-meta>{"deckStyle":"tech","tweaks":{"preset":"claude"},"title":"","body":"","tags":[""],"cards":[{"kind":"cover","layoutArchetype":"editorial-hero-window","badge":"","heading":"","accent":"","lines":[""],"callout":"","tags":[""],"imageUrl":"","source":["来源段落id"]}],"referencePlan":{"images":[{"id":"ref-1","role":"cover","reason":"巨型标题和主视觉窗口，适合封面"},{"id":"ref-2","role":"content","reason":"三阶段时间轴，适合步骤页"},{"id":"ref-3","role":"style","reason":"暖色便签和细线网格，可统一整套气质"}],"sharedImageIds":["ref-3"],"pages":[{"page":1,"imageIds":["ref-1"]},{"page":3,"imageIds":["ref-2"]},{"page":5,"imageIds":["ref-2"]}]}}</xhs-meta>',
+    '<xhs-meta>{"deckStyle":"editorial","tweaks":{"preset":"editorial"},"artDirection":{"genre":"编辑部杂志深度复盘","visualLanguage":"衬线大标题 + 开放式细线分割 + 非对称留白，拒绝方框套方框","rhythm":"主视觉封面 → 开放式编号条列 → 轻量对比 → 竖排侧栏金句 → 浅色信笺尾页","endMood":"light"},"title":"","body":"","tags":[""],"cards":[{"kind":"cover","layoutArchetype":"editorial-magazine-hero","badge":"","heading":"","accent":"","lines":[""],"callout":"","tags":[""],"imageUrl":"","source":["来源段落id"]}],"referencePlan":{"images":[{"id":"ref-1","role":"cover","reason":"巨型标题和主视觉窗口，适合封面"},{"id":"ref-2","role":"content","reason":"三阶段时间轴，适合步骤页"},{"id":"ref-3","role":"style","reason":"暖色便签和细线网格，可统一整套气质"}],"sharedImageIds":["ref-3"],"pages":[{"page":1,"imageIds":["ref-1"]},{"page":3,"imageIds":["ref-2"]},{"page":5,"imageIds":["ref-2"]}]}}</xhs-meta>',
     '<xhs-style>.xhs-artboard .story-kicker { color: var(--xhs-accent); font-weight: 800; }</xhs-style>',
   ].join('\n')
 }
@@ -297,9 +299,9 @@ function parseTagAttrsSimple(rawAttrs) {
 }
 
 const XHS_LAYOUT_RULE = [
-  '- 空间填充与防断层铁律：画布外层 .xhs-artboard 为 1080×1440 竖向 flex 容器（.cd-header + .cd-main + .cd-footer），.cd-main 必须使用 flex: 1 填满中部空间；编号、箭头、状态标签必须内聚进对应的内容卡片内部，严禁输出空占位框、独立占整行的裸箭头或把只有一两句话的小卡片拉出大片内部空白；底部总结条/引导胶囊放入 .cd-footer 并占满宽度，严禁正文溢出覆盖 .cd-footer。',
-  '- 按内容密度自适应布局：1–2 个信息块采用大字金句卡或主视觉截图窗 + 双列紧凑要点卡（底部要点卡 flex: 0 0 auto 按内容自适应高度，不要与主卡平分高度）；3–4 个信息块采用全宽纵排卡片（每块 strong 标题 + p 说明，单块说明 ≤ 45 字）；5–8 个信息块采用 2 列 Bento 矩阵或左右对照表 + 底部总结块。',
-  '- 1080×1440 强制字号与无单位行高规范：严禁使用 12px–16px 的网页小字！主标题 .cd-title 52px–66px（line-height: 1.2），区块小标题 strong 26px–34px（line-height: 1.3），正文/步骤/表格说明 p 22px–25px（line-height: 1.45），角标/代码/胶囊标签 18px–21px（line-height: 1.35）。所有行高必须使用无单位倍数（如 1.45），严禁写过小的固定 px 行高导致换行重叠；深色底区块（background: var(--xhs-dark)）内部所有文字必须显式设为浅色（#FFFFFF 或 rgba(255,255,255,0.86)），严禁白底白字或深底黑字。',
+  '- 反“方方正正”与反“框套框”铁律：不要把每段文字都塞进带边框的圆角白盒子里！优先采用开放式杂志排版（直接排在画布底色上，用 1px solid var(--xhs-line) 细分割线、大幅呼吸留白、巨型浅色序号、非对称栏宽如 0.32fr 0.68fr、左侧竖排装饰栏 writing-mode: vertical-rl、或内联 SVG 轻图表/进度条/手绘下划线来划分层级），避免机械的“卡片框里再套小方框”；严禁臆造 ACTIVE / 100% 就绪 / SUMMARY / 效率拉满 等原文没有的假仪表盘水词。',
+  '- 空间填充与尾页色调适配：画布外层 .xhs-artboard 为 1080×1440 竖向 flex 容器（.cd-header + .cd-main + .cd-footer），.cd-main 使用 flex: 1 自然舒展，底部页脚稳固不溢出；尾页（end）严格按 artDirection.endMood 匹配整套气质（light 浅底留白 / tint 浅底便签 / split 区块分割 / 仅硬核极客题材选 dark 并显式设 background: var(--xhs-dark)），严禁默认千篇一律暗黑尾页。',
+  '- 1080×1440 强制字号、行高与精炼 CSS 规范：严禁使用 12px–16px 网页小字！主标题 52px–70px（line-height: 1.18），区块小标题 26px–36px（line-height: 1.3），正文说明 22px–26px（line-height: 1.48），角标/注脚 18px–21px（无单位 line-height）；装饰线、分割线与水印严禁遮挡或贯穿正文文字；深色底区块（background: var(--xhs-dark)）内部所有文字必须显式设为浅色（#FFFFFF 或 rgba(255,255,255,0.86)）；单页 <xhs-page-style> 请精炼控制在 800–2200 字符内（严禁超过 3800 字符），避免超预算触发兜底模板。',
 ].join('\n')
 
 function sanitizeModelPageCss(rawCss) {
@@ -420,10 +422,13 @@ function selectArticleImagesForCards(allImages, targetCards) {
   return []
 }
 
-async function runWithConcurrency(items, concurrency, worker) {
+async function runWithConcurrency(items, concurrency, worker, { staggerMs = 0 } = {}) {
   const limit = Math.max(1, Math.min(concurrency, items.length || 1))
   let cursor = 0
-  const runners = Array.from({ length: limit }, async () => {
+  const runners = Array.from({ length: limit }, async (_, slot) => {
+    if (staggerMs > 0 && slot > 0) {
+      await new Promise(resolve => setTimeout(resolve, slot * staggerMs))
+    }
     while (cursor < items.length) {
       const pos = cursor++
       await worker(items[pos], pos)
@@ -453,9 +458,11 @@ function buildXhsBatchCardsPrompt({ article, prepared, deck, batchIndices, userI
     referenceImageIds: selectedByCard[batchIndex].map(image => image.id),
   }))
   const hasRefs = images.length > 0
+  const styleKit = resolveXhsStyleKit(prepared.designPrompt, deck.artDirection)
   // 保持 Stage 2 system prompt 在同套卡片的并行调用之间完全稳定（不含动态页数/图片数），以最大化 LLM KV Prefix Cache 命中率
   const system = [
     String(prepared.skill ?? '').trim(),
+    styleKit?.guidance || '',
     [
       '# 阶段 2：分批自由 HTML/CSS 精绘任务',
       '请只为本次 targetCards 指定的目标页小红书卡片（1080×1440 .xhs-artboard 内部 HTML）设计高设计感、互不重样的自由 HTML 与可选单页 CSS。',
@@ -477,6 +484,7 @@ function buildXhsBatchCardsPrompt({ article, prepared, deck, batchIndices, userI
   const scopedImages = selectArticleImagesForCards(prepared.images, targetCards)
   const user = JSON.stringify({
     title: String(article?.title ?? ''),
+    ...(deck.artDirection ? { artDirection: deck.artDirection } : {}),
     ...(prepared.designPrompt ? { designPrompt: prepared.designPrompt } : {}),
     ...(hasRefs ? { referenceImageCount: images.length } : {}),
     customCss: deck.customCss || '',
@@ -509,8 +517,10 @@ function buildSingleCardRedesignPrompt({ article, blocks, images, deck, cardInde
     }
   })
 
+  const styleKit = resolveXhsStyleKit(deck.designPrompt || cardPrompt, deck.artDirection)
   const system = [
     String(skill ?? '').trim(),
+    styleKit?.guidance || '',
     [
       '# 单页重设计任务（只改这一页，不动其他页）',
       `你需要重新设计第 ${cardIndex + 1} / ${deck.cards.length} 页小红书卡片（1080×1440 .xhs-artboard 内部 HTML）。`,
@@ -533,6 +543,7 @@ function buildSingleCardRedesignPrompt({ article, blocks, images, deck, cardInde
   const scopedImages = selectArticleImagesForCards(images, [targetCard])
   const user = JSON.stringify({
     title: String(article?.title ?? ''),
+    ...(deck.artDirection ? { artDirection: deck.artDirection } : {}),
     deckDesignPrompt: deck.designPrompt || '',
     customCss: deck.customCss || '',
     page: cardIndex + 1,
@@ -645,6 +656,22 @@ async function runSingleCardModelCall(ctx, prompt, { maxTokens = 6144, images = 
   return null
 }
 
+function diagnoseCardParseFailure(rawText) {
+  const source = String(rawText ?? '').replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '').trim()
+  if (!source) return { code: 'empty', label: '模型返回为空' }
+  if (/<xhs[-_]card\b/i.test(source) && !/<\/xhs[-_]card>/i.test(source)) {
+    return { code: 'truncated', label: '输出截断未闭合' }
+  }
+  const styles = [
+    ...[...source.matchAll(/<xhs[-_]page[-_]style\b[^>]*>([\s\S]*?)<\/xhs[-_]page[-_]style>/gi)].map(m => m[1]?.trim()),
+    ...[...source.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map(m => m[1]?.trim()),
+  ].filter(Boolean).join('\n')
+  if (styles && sanitizeModelPageCss(styles) === null) {
+    return { code: 'css_overflow', label: '单页 CSS 超出预算' }
+  }
+  return { code: 'invalid_markup', label: '未提取到合法卡片 HTML' }
+}
+
 function isRateLimitError(err) {
   return err?.status === 429 || XHS_RATE_LIMIT_RE.test(String(err?.message ?? err ?? ''))
 }
@@ -657,6 +684,7 @@ async function synthesizeStagedXhsHtml(ctx, {
   onActiveChange,
   onStage,
   onImageFallback,
+  onCardFallback,
   visionSupport,
   attachmentCache,
   concurrency = XHS_STAGE2_CONCURRENCY,
@@ -698,7 +726,7 @@ async function synthesizeStagedXhsHtml(ctx, {
     return true
   }
 
-  // 阶段 2：按单页并发池精绘自由 HTML/CSS（每页独立上下文 + 共享 system 前缀缓存），
+  // 阶段 2：按单页并发池精绘自由 HTML/CSS（错峰启动防突发限流 + 每页独立上下文 + 共享 system 前缀缓存），
   // 任意一页闭合后立即回调落盘展示，且单页截断/限流不会阻塞其他页面！
   await runWithConcurrency(missingIndices, resolvedConcurrency, async idx => {
     inFlightSet.add(idx)
@@ -712,6 +740,7 @@ async function synthesizeStagedXhsHtml(ctx, {
 
     let hit = null
     let rateLimited = false
+    let failure = { code: 'invalid_markup', label: '未返回完整 HTML' }
     try {
       const raw = await callModel(ctx, {
         system: cardPrompt.system,
@@ -726,8 +755,14 @@ async function synthesizeStagedXhsHtml(ctx, {
       })
       const parsedMap = parseXhsBatchCardsMarkup(raw, [idx])
       hit = parsedMap.get(idx) ?? parseSingleCardModelOutput(raw)
+      if (!hit?.html) {
+        failure = diagnoseCardParseFailure(raw)
+      }
     } catch (err) {
       rateLimited = isRateLimitError(err)
+      failure = rateLimited
+        ? { code: 'rate_limit', label: '触发模型并发限流' }
+        : { code: 'call_error', label: String(err?.message || '模型请求异常').slice(0, 60) }
       hit = null
     }
 
@@ -736,10 +771,16 @@ async function synthesizeStagedXhsHtml(ctx, {
       return
     }
 
-    // 限流时短退避后再进入单页兜底重试，避免并发风暴
-    if (rateLimited) {
-      await new Promise(resolve => setTimeout(resolve, 350 + Math.floor(Math.random() * 250)))
+    // 限流或请求异常时退避后再进入单页定向重试，避免并发风暴导致退回兜底模板
+    if (rateLimited || failure.code === 'call_error') {
+      await new Promise(resolve => setTimeout(resolve, (rateLimited ? 1000 : 400) + Math.floor(Math.random() * 500)))
     }
+
+    const targetedReason = failure.code === 'css_overflow'
+      ? `上一轮 <xhs-page-style> 超出 ${DERIVE_LIMITS.xhs.pageCss} 字符上限被拒绝。请务必将单页 CSS 精简到 1500 字符以内（合并同类选择器、减少冗余属性），再输出完整闭合的 <xhs-card>。`
+      : failure.code === 'truncated'
+        ? '上一轮输出被截断未闭合 </xhs-card>。请精简 DOM 层级和 CSS，确保完整输出并闭合标签。'
+        : '该页精绘未返回完整 HTML，请精简样式（CSS ≤ 1800 字符）并完整输出闭合的 <xhs-card>。'
 
     try {
       const cardReferenceImages = selectXhsReferenceImages(refImages, deck.referencePlan, idx)
@@ -751,7 +792,7 @@ async function synthesizeStagedXhsHtml(ctx, {
         cardIndex: idx,
         cardPrompt: prepared.designPrompt || '',
         referenceImages: cardReferenceImages,
-        reason: '该页精绘未返回完整 HTML，请单独精绘本页。',
+        reason: targetedReason,
         skill: prepared.skill,
       })
       const retried = await runSingleCardModelCall(ctx, singlePrompt, {
@@ -764,14 +805,16 @@ async function synthesizeStagedXhsHtml(ctx, {
       if (retried?.html) {
         commitCard(idx, retried)
       } else {
+        onCardFallback?.(idx, failure.label)
         inFlightSet.delete(idx)
         scheduleCardReady(idx)
       }
-    } catch {
+    } catch (retryErr) {
+      onCardFallback?.(idx, isRateLimitError(retryErr) ? '触发模型并发限流' : failure.label)
       inFlightSet.delete(idx)
       scheduleCardReady(idx)
     }
-  })
+  }, { staggerMs: 15 })
 
   await writeChain
 
@@ -1094,11 +1137,15 @@ export async function generateDerivative(ctx, store, {
         })
       }
 
+      const fallbackReasons = new Map()
       const enrichedCards = await synthesizeStagedXhsHtml(ctx, {
         article,
         prepared,
         deck: withPrompt,
         onImageFallback,
+        onCardFallback: (idx, reason) => {
+          fallbackReasons.set(idx + 1, reason)
+        },
         visionSupport: resolvedVisionSupport,
         attachmentCache,
         concurrency,
@@ -1154,6 +1201,9 @@ export async function generateDerivative(ctx, store, {
           : null,
       })
 
+      const fallbackPages = enrichedCards
+        .map((c, idx) => (!c.html ? idx + 1 : -1))
+        .filter(page => page > 0)
       normalized = normalizeXhs(
         { ...withPrompt, cards: enrichedCards },
         {
@@ -1163,6 +1213,17 @@ export async function generateDerivative(ctx, store, {
           strictCardLength: false,
         },
       )
+      if (fallbackPages.length) {
+        const detail = fallbackPages
+          .map(page => {
+            const reason = fallbackReasons.get(page)
+            return reason ? `第 ${page} 页（${reason}）` : `第 ${page} 页`
+          })
+          .join('、')
+        normalized.warnings.unshift(
+          `${detail} AI 精绘未完成，已暂用兜底版式展示，可点击对应页的「重设计此页」重新生成。`,
+        )
+      }
     } else if (prepared.designPrompt) {
       normalized = normalizeXhs(withPrompt, {
         blockIds: prepared.blockIds,
