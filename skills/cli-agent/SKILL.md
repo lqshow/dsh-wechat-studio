@@ -93,12 +93,35 @@ wechat-studio draft verify --json
 wechat-studio draft push article.md --bag <bagId> --dry-run --json
 wechat-studio draft push article.md --article <articleId> --style neo --theme forest --banner banner.json --follow-card --cover cover.png --json
 
-# 12. 一稿多发（基于工作区稿件库已成稿导出通用 Markdown、串推、小红书）
+# 12. 一稿多发（基于工作区稿件或本地 Markdown 导出通用 Markdown、串推、小红书图文与 PNG）
 wechat-studio derive markdown <articleId> --target zhihu --out zhihu.md --json
 wechat-studio derive thread <articleId> --variant x --prompt-only --json
-wechat-studio derive xhs <articleId> --prompt-only --json
-# 或直连模型生成并回写工作区：
 wechat-studio derive thread <articleId> --variant jike --force --json
+
+# 小红书图文：先查询全部可选风格、配色主题与背景氛围装饰
+wechat-studio derive xhs --options --json
+# 支持稿件 ID、本地 .md 文件或 - 读 stdin，并直接渲染 2× 高清 PNG 到 --out-dir
+wechat-studio derive xhs article.md --style monocle --theme editorial --decor silk-dots --decor-scope smart --out-dir ./xhs-out --json
+# 支持自定义设计想法与多张参考图：
+wechat-studio derive xhs article.md --design-prompt "杂志暖纸感，克制留白" --ref-image ref1.png --ref-image ref2.png --out-dir ./xhs-out --json
+# 免额外 API Key 闭环：由外部 Agent 自身模型生成精绘 deck.json 后，一步校验入库并导出 2× 高清 PNG：
+wechat-studio derive xhs apply article.md deck.json --style monocle --theme editorial --decor silk-dots --decor-scope smart --out-dir ./xhs-out --json
+# 零模型成本换配色 / 换背景氛围装饰重新出图：
+wechat-studio derive xhs render <articleId> --theme bold --decor orbital-arc --decor-scope cover --out-dir ./xhs-out --json
 ```
+
+## 小红书图文对话式交互协议（外部 Agent 必读）
+
+当用户在对话中要求「把文章转成小红书图文 / 生成小红书卡片」时，**不要跳过确认直接盲目生成**，也**不需要用户配置额外的 `WECHAT_STUDIO_API_KEY`**，请按以下 3 步与用户对话协作：
+
+1. **先拉取最新选项清单**：运行 `wechat-studio derive xhs --options --json`（或直接运行 `derive xhs` 触发风格确认门禁），获取最新的视觉风格（`styles`）、配色主题（`themes`）、背景氛围装饰（`decors`）与作用范围（`decorScopes`）。
+2. **用简洁问题向用户确认偏好**（除非用户已在首句明确指定）：
+   - **视觉风格**：让用户选择「① 自由发挥（`auto`，AI 按题材定制）」、「② 从 7 套固定风格里选一套（如瑞士大字报 `swiss`、纽约客报纸 `newyorker`、Monocle 日系 `monocle`、工业工具说明书 `manual`、红笔手账 `notebook`、工程实测 `tech`、杂志画报 `editorial`）」、「③ 输入自定义风格描述（`--design-prompt`）」或「④ 提供本地参考图路径（`--ref-image`）」。
+   - **配色与氛围装饰**：询问是否使用默认「智能匹配（`--decor auto --decor-scope smart`，封面浓、内页轻）」，还是指定配色主题（如 Anthropic 暖砂 `editorial`、Claude 词元紫 `claude` 等）与背景装饰（如流光丝带×点阵 `silk-dots`、印刷准星 `editorial-frame` 等）。
+3. **执行生成并交付成图（支持零额外 Key 自动精绘）**：
+   - 将用户选择拼入 `wechat-studio derive xhs <file.md|articleId> ... --out-dir <dir> --json` 执行。
+   - 若返回 `mode: "agent_generate"`（未配独立 CLI 模型 Key），直接用你自身的大模型按返回的 `system`、`user`、`styleKit.guidance`（内置排版原语类）与 `articleImages`（原文配图）生成精绘 `deck.json`，再执行返回的 `applyCommand`（即 `wechat-studio derive xhs apply ... --out-dir <dir> --json`）一步入库并渲染 2× 高清 PNG。
+   - 生成后向用户汇报 `post.txt`（可直接复制的小红书标题/正文/标签）、`preview.html`（离线画廊）以及导出的 2× 高清 PNG 路径列表。
+   - 若用户后续想换配色、换背景装饰或只给封面加装饰，**不要重新调模型**，直接调用 `wechat-studio derive xhs render <articleId> --theme ... --decor ... --decor-scope ... --out-dir <dir> --json` 秒级重出图。
 
 `--operation-id` 可选。重试同一次建稿时，沿用相同的 ID、袋子和 Markdown 内容。

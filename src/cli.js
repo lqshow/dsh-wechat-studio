@@ -11,9 +11,13 @@ import { buildCoverPromptRequest } from './cover-prompt.js'
 import { COVER_STYLES } from './cover-styles.js'
 import { listCoverStyles, resolveCoverReferenceImage, resolveCoverStyle } from './custom-cover-styles.js'
 import { coverPrompt, generateCoverImage, readCover, saveCover } from './cover.js'
-import { generateDerivative, prepareDerivePrompt } from './derive.js'
+import { applyXhsDerivative, extractArticleImages, generateDerivative, prepareDerivePrompt } from './derive.js'
 import { toPortableMarkdown } from './derive-markdown.js'
-import { MARKDOWN_TARGETS, THREAD_VARIANTS, threadClipboardText, xhsClipboardText } from './derive-shared.js'
+import { DERIVE_LIMITS, MARKDOWN_TARGETS, THREAD_VARIANTS, normalizeXhsTweaks, threadClipboardText, xhsClipboardText } from './derive-shared.js'
+import { XHS_DESIGN_STYLE_OPTIONS, resolveXhsDesignPromptOption, resolveXhsStyleKit } from './xhs-style-kits.js'
+import { exportXhsDeckToDir } from './xhs-cli-export.js'
+import { XHS_STYLE_PRESETS } from '../client/xhs-card-html.js'
+import { XHS_DECOR_PRESETS, XHS_DECOR_SCOPES } from '../client/xhs-card-decor.js'
 import { buildInsights, importData, INSIGHTS_EMPTY } from './insights.js'
 import { checkBanner, detectionText, renderLayout, renderSvgCard, renderWechatHtml, resolveLayoutPreferences, STYLES, SVG_CARD_KINDS, THEMES } from './layout.js'
 import { MAX_WECHAT_TITLE, runPreflight } from './preflight.js'
@@ -69,6 +73,7 @@ const VALUE_FLAGS = new Set([
   '--mp-name', '--mp-app-id', '--mp-app-secret', '--from-json', '--preflight-words',
   '--app-id', '--app-secret', '--cover', '--avatar', '--target', '--variant',
   '--bag', '--article', '--image', '--partner', '--date', '--selling-points', '--must-include', '--taboo', '--markdown',
+  '--design-prompt', '--ref-image', '--decor', '--decor-scope', '--out-dir', '--preset',
 ])
 
 const HELP_TEXT = `wechat-studio v${VERSION} — 微信公众号成稿台 CLI（兼容 DeepSeek Harness 插件工作区）
@@ -239,11 +244,25 @@ push 选项:
   derive: `用法:
   wechat-studio derive markdown <articleId> [--target zhihu|juejin|blog] [--out <file.md>]
   wechat-studio derive thread   <articleId> [--variant jike|x] [--force] [--prompt-only]
-  wechat-studio derive xhs      <articleId> [--force] [--prompt-only]
+  wechat-studio derive xhs      --options
+  wechat-studio derive xhs      <articleId|file.md|-> [--style <id>] [--design-prompt <text>] [--ref-image <path>]
+                                [--theme <preset>] [--decor <preset>] [--decor-scope <scope>]
+                                [--out-dir <dir>] [--no-png] [--force] [--prompt-only]
+  wechat-studio derive xhs apply <articleId|file.md|-> <deck.json|-> [--style <id>] [--theme <preset>] [--decor <preset>] [--decor-scope <scope>] [--out-dir <dir>] [--no-png]
+  wechat-studio derive xhs render <articleId> --out-dir <dir> [--theme <preset>] [--decor <preset>] [--decor-scope <scope>] [--no-png]
 说明:
-  基于工作区稿件库中的已成稿，导出通用 Markdown 或提炼即刻/X 串推、小红书图文。
-  卡片 PNG 与 ZIP 打包请在插件「一稿多发」页导出。
+  基于工作区稿件或本地 Markdown 文件，导出通用 Markdown 或提炼即刻/X 串推、小红书图文。
+  小红书支持 8 套视觉风格、自定义设计想法、参考图、6 套配色主题、6 套矢量背景氛围装饰，以及 --out-dir 直接输出文案、preview.html 与 2× 高清 PNG。
 常用选项:
+  --options                            列出小红书可选风格、配色主题、背景氛围装饰与作用范围（供 Agent 生成前向用户确认）
+  --style <id>                         小红书视觉风格（auto/swiss/newyorker/monocle/manual/notebook/tech/editorial）
+  --design-prompt <text>               自定义小红书设计想法（可单独使用，也可与 --style 叠加）
+  --ref-image <path>                   本地参考图路径（PNG/JPEG/WebP，可重复传入，最多 10 张）
+  --theme <preset>                     小红书配色主题（claude/editorial/tech/emerald/bold/theme）
+  --decor <preset>                     背景氛围装饰（auto/silk-dots/editorial-frame/orbital-arc/swiss-grid/ink-wash/blueprint-tech/none）
+  --decor-scope <scope>                装饰作用范围（smart/cover/all/none）
+  --out-dir <dir>                      导出目录：写入 post.txt、deck.json、preview.html 及 2× 高清 PNG（需本机 Chrome/Chromium）
+  --no-png                             配合 --out-dir 跳过无头 Chrome 截屏，仅导出文案、JSON 与 HTML 预览
   --target <zhihu|juejin|blog>         通用 Markdown 目标平台（默认 blog）
   --variant <jike|x>                   串推平台（默认 jike）
   --out <file.md>                      将通用 Markdown 写入文件
@@ -1315,22 +1334,23 @@ async function handleDerive(argv, io, secrets) {
     }
     return emitSuccess(io, values.json, { id: article.id, target: values.target, out: null, ...result }, result.markdown.replace(/\n$/, ''))
   }
-  if (action === 'thread' || action === 'xhs') {
-    const platform = action
+  if (action === 'xhs') {
+    return await handleDeriveXhs(rest, io, secrets)
+  }
+  if (action === 'thread') {
+    const platform = 'thread'
     const { values, positionals } = parseSubcommandArgs(rest, {
       ...LLM_OPTIONS,
-      ...(platform === 'thread' ? { variant: { type: 'string', default: 'jike' } } : {}),
+      variant: { type: 'string', default: 'jike' },
       force: { type: 'boolean', default: false },
       'prompt-only': { type: 'boolean', default: false },
     })
     if (values.help) return emitSuccess(io, values.json, { help: SUB_HELP.derive }, SUB_HELP.derive)
-    const usage = platform === 'thread'
-      ? '用法：wechat-studio derive thread <articleId> [--variant jike|x] [--force] [--prompt-only]'
-      : '用法：wechat-studio derive xhs <articleId> [--force] [--prompt-only]'
+    const usage = '用法：wechat-studio derive thread <articleId> [--variant jike|x] [--force] [--prompt-only]'
     assertPositionals(positionals, 1, usage)
     const id = positionals[0]
     if (!id) throw new UsageError(usage)
-    if (platform === 'thread' && !THREAD_VARIANTS.includes(values.variant)) {
+    if (!THREAD_VARIANTS.includes(values.variant)) {
       throw new UsageError(`不支持的串推平台：${values.variant}（可选：${THREAD_VARIANTS.join(', ')}）`)
     }
     const dataDir = resolveDataDir(values, io.env)
@@ -1344,7 +1364,7 @@ async function handleDerive(argv, io, secrets) {
         promptOnly: true,
         id: article.id,
         platform,
-        ...(platform === 'thread' ? { variant: prepared.variant } : {}),
+        variant: prepared.variant,
         system: prepared.system,
         user: prepared.user,
       }
@@ -1359,16 +1379,473 @@ async function handleDerive(argv, io, secrets) {
       root: dataDir,
     })
     const warnText = record.warnings?.length ? `\n\n提醒：\n${record.warnings.map(w => `- ${w}`).join('\n')}` : ''
-    let human
-    if (platform === 'thread') {
-      human = `${threadClipboardText(record.payload.posts)}${warnText}`
-    } else {
-      const outline = record.payload.cards.map((card, i) => `[${i + 1}/${record.payload.cards.length} ${card.kind}] ${card.heading}${card.lines.length ? ` — ${card.lines.join(' / ')}` : ''}`).join('\n')
-      human = `${xhsClipboardText(record.payload)}\n\n---\n卡片大纲：\n${outline}\n\n提示：卡片 PNG 请在插件「一稿多发」页导出。${warnText}`
-    }
+    const human = `${threadClipboardText(record.payload.posts)}${warnText}`
     return emitSuccess(io, values.json, { id, ...record }, human)
   }
   throw new UsageError(`未知的 derive 子命令：${action}（支持 markdown、thread、xhs）`)
+}
+
+async function readReferenceImageDataUrl(filePath) {
+  let buf
+  try {
+    buf = await readFile(filePath)
+  } catch (err) {
+    throw new UsageError(`无法读取参考图「${filePath}」：${err.message}`)
+  }
+  const lower = String(filePath).toLowerCase()
+  let mime = 'image/png'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mime = 'image/jpeg'
+  else if (lower.endsWith('.webp')) mime = 'image/webp'
+  else if (lower.endsWith('.gif')) mime = 'image/gif'
+  else if (!lower.endsWith('.png')) {
+    throw new UsageError(`参考图仅支持 PNG/JPEG/WebP/GIF 格式：${filePath}`)
+  }
+  return `data:${mime};base64,${buf.toString('base64')}`
+}
+
+function buildXhsOptionsCatalog() {
+  const styles = XHS_DESIGN_STYLE_OPTIONS.map(({ id, label, tagline }) => ({ id, label, tagline }))
+  const themes = XHS_STYLE_PRESETS.map(({ id, label, desc, accent, bg }) => ({ id, label, desc, accent, bg }))
+  const decors = XHS_DECOR_PRESETS.map(({ id, label, desc }) => ({ id, label, desc }))
+  const decorScopes = XHS_DECOR_SCOPES.map(({ id, label }) => ({ id, label }))
+  const styleInlineList = styles.map(s => `${s.id}(${s.label})`).join(' / ')
+  const themeInlineList = themes.map(t => `${t.id}(${t.label})`).join(' / ')
+  const decorInlineList = decors.map(d => `${d.id}(${d.label})`).join(' / ')
+  const requiredQuestions = [
+    {
+      step: 1,
+      field: 'style',
+      question: `第 1 步｜选视觉风格（全部 8 套：${styleInlineList}；也可输入自定义风格描述或本地参考图路径）`,
+      flag: '--style <id> / --design-prompt "<自定义想法>" / --ref-image <path>',
+      options: styles,
+    },
+    {
+      step: 2,
+      field: 'theme',
+      question: `第 2 步｜选配色主题（全部 6 套：${themeInlineList}）`,
+      flag: '--theme <preset>',
+      options: themes,
+    },
+    {
+      step: 3,
+      field: 'decor',
+      question: `第 3 步｜选背景氛围装饰（全部 8 套：${decorInlineList}；范围默认 smart 封面浓/内页轻，也可指定 cover/all/none）`,
+      flag: '--decor <preset> --decor-scope <smart|cover|all|none>',
+      options: decors,
+      scopes: decorScopes,
+    },
+  ]
+  return {
+    styles,
+    themes,
+    decors,
+    decorScopes,
+    requiredQuestions,
+    interactionFlow: [
+      '【强制 3 步】生成前必须向用户逐一确认全部 3 个独立问题（style 视觉风格、theme 配色主题、decor 背景氛围装饰），CLI 门禁会校验这 3 项是否齐全，缺任何一项都会被拦截。',
+      '【防选项截断】若客户端提问卡片每题最多只能放 4 个快捷按钮，请原样保留 requiredQuestions[i].question 中自带的全量选项速查表（让用户一眼看全全部 8 套风格/6 套配色/8 套装饰），再配 4 个最推荐快捷按钮供点选。',
+      '传入稿件 ID、本地 .md 文件或 - 读 stdin，并带上 --style、--theme、--decor、--out-dir <dir> 即可生成或导出 2× 高清 PNG/GIF。',
+    ],
+  }
+}
+
+function formatXhsOptionsHuman(catalog) {
+  const lines = [
+    '小红书图文可选配置：',
+    '',
+    '1. 视觉风格（--style <id> 或 --design-prompt "<自定义想法>"）：',
+    ...catalog.styles.map(s => `   - ${s.id.padEnd(10)} ${s.label}（${s.tagline}）`),
+    '',
+    '2. 配色主题（--theme <id>）：',
+    ...catalog.themes.map(t => `   - ${t.id.padEnd(10)} ${t.label}（${t.desc}）`),
+    '',
+    '3. 背景氛围装饰（--decor <id>）：',
+    ...catalog.decors.map(d => `   - ${d.id.padEnd(16)} ${d.label}（${d.desc}）`),
+    '',
+    '4. 装饰作用范围（--decor-scope <id>）：',
+    ...catalog.decorScopes.map(s => `   - ${s.id.padEnd(10)} ${s.label}`),
+  ]
+  return lines.join('\n')
+}
+
+function parseXhsTweaksFlags(values) {
+  const raw = {}
+  const presetInput = values.theme || values.preset
+  if (presetInput) {
+    const validPresets = XHS_STYLE_PRESETS.map(p => p.id)
+    if (!validPresets.includes(presetInput)) {
+      throw new UsageError(`不支持的小红书配色主题：${presetInput}（可选：${validPresets.join(', ')}）`)
+    }
+    raw.preset = presetInput
+  }
+  if (values.decor) {
+    const validDecors = XHS_DECOR_PRESETS.map(d => d.id)
+    if (!validDecors.includes(values.decor)) {
+      throw new UsageError(`不支持的背景氛围装饰：${values.decor}（可选：${validDecors.join(', ')}）`)
+    }
+    raw.decor = values.decor
+  }
+  if (values['decor-scope']) {
+    const validScopes = XHS_DECOR_SCOPES.map(s => s.id)
+    if (!validScopes.includes(values['decor-scope'])) {
+      throw new UsageError(`不支持的装饰作用范围：${values['decor-scope']}（可选：${validScopes.join(', ')}）`)
+    }
+    raw.decorScope = values['decor-scope']
+  }
+  return Object.keys(raw).length ? normalizeXhsTweaks(raw) : null
+}
+
+async function resolveXhsTargetArticle(input, store, io, { persistImport = true } = {}) {
+  const state = await store.read()
+  if (input !== '-') {
+    const existing = state.articles.find(a => a.id === input)
+    if (existing) return { article: existing, imported: false }
+  }
+  const markdown = await readTextFile(input, 'Markdown 文件或稿件 ID', io)
+  if (!markdown.trim()) throw new UsageError('Markdown 内容为空。')
+  const article = createArticle({ markdown })
+  if (persistImport) {
+    await store.update(s => {
+      if (s.lastLayoutPreferences) article.layoutPreferences = { ...s.lastLayoutPreferences }
+      s.articles.push(article)
+      s.currentId = article.id
+    })
+  }
+  return { article, imported: persistImport }
+}
+
+function buildXhsAgentGenerateBundle({
+  article,
+  prepared,
+  styleRes,
+  tweakOverrides,
+  targetInput,
+  values,
+}) {
+  const styleKit = resolveXhsStyleKit(prepared.designPrompt, null)
+  const articleImages = extractArticleImages(article).map(img => ({
+    id: img.id,
+    url: img.url,
+    ...(img.alt ? { alt: img.alt } : {}),
+  }))
+  const flags = []
+  if (values.style) flags.push(`--style ${values.style}`)
+  if (values['design-prompt']) flags.push(`--design-prompt ${JSON.stringify(values['design-prompt'])}`)
+  if (values.theme || values.preset) flags.push(`--theme ${values.theme || values.preset}`)
+  if (values.decor) flags.push(`--decor ${values.decor}`)
+  if (values['decor-scope']) flags.push(`--decor-scope ${values['decor-scope']}`)
+  if (values['out-dir']) flags.push(`--out-dir ${values['out-dir']}`)
+  if (values['no-png']) flags.push('--no-png')
+  const applyCommand = `wechat-studio derive xhs apply ${targetInput} deck.json${flags.length ? ` ${flags.join(' ')}` : ' --out-dir ./xhs-out'} --json`
+  const htmlDesignContract = [
+    '请直接用你自身的大模型生成完整 deck.json（含 title、body、tags、deckStyle、artDirection、customCss 与 5–8 张 cards，body 不少于 20 字）。',
+    '每张 card 必须包含 kind、heading、subheading、lines，以及精绘的 html（和可选 pageCss），直接面向 1080×1440 画布排版：',
+    '- 【饱满度与版面重心】禁止 8–10 行极简敷衍！每页内容需饱满有层次，自然占据 1080×1440 画布 70%–85% 的纵向高度，避免上半区挤满而下半区大面积空白；',
+    '- 【主题变量】严格使用 CSS 变量（var(--xhs-accent)、var(--xhs-tint)、var(--xhs-bg)、var(--xhs-card)、var(--xhs-ink)、var(--xhs-ink2)、var(--xhs-line)），不要硬编码死色，方便后续一键换肤；',
+    '- 【内置风格原语】若下方提供了 styleKit.guidance，请严格复用其内置排版原语类（特别是红笔手账 notebook 风格，必须在主内容容器套上 .nb-paper 以呈现横线纸面与左侧装订竖线，并搭配 .nb-tape-note / .nb-stamp / .nb-check-item）；',
+    '- 【优先穿插原文配图】若下方 articleImages 提供了原文截图，请优先挑选 2–4 张最关键的实测图，用 <img src="真实URL" style="width:100%;border-radius:12px;object-fit:cover;" /> 穿插到封面或步骤/实测页并配图注，不要做成全纯文字 PPT；',
+    '- 【严禁文字重叠】大号数字/指标（如 20→14s、01、37.67）与右侧说明并排时，严禁使用过窄固定列宽（如 100px 1fr），必须用 grid-template-columns: auto 1fr; gap: 24px（数字列加 white-space: nowrap）或改为上下堆叠；',
+    '- 【背景氛围层】不要在 html 里手绘四角背景氛围装饰，渲染器会自动叠加用户选定的矢量氛围背景层，并在出图前自动运行纵向均衡引擎；',
+    '- 生成完保存为 deck.json 后，运行 applyCommand 即可一步完成校验入库、同步插件工作区并导出 2× 高清 PNG。',
+  ].join('\n')
+  return {
+    styleKit: styleKit ? { id: styleKit.id, name: styleKit.name, guidance: styleKit.guidance } : null,
+    articleImages,
+    htmlDesignContract,
+    applyCommand,
+  }
+}
+
+async function handleDeriveXhs(rest, io, secrets) {
+  const { values, positionals } = parseSubcommandArgs(rest, {
+    ...LLM_OPTIONS,
+    options: { type: 'boolean', default: false },
+    style: { type: 'string' },
+    'design-prompt': { type: 'string' },
+    'ref-image': { type: 'string', multiple: true },
+    theme: { type: 'string' },
+    preset: { type: 'string' },
+    decor: { type: 'string' },
+    'decor-scope': { type: 'string' },
+    'out-dir': { type: 'string' },
+    'no-png': { type: 'boolean', default: false },
+    yes: { type: 'boolean', default: false },
+    force: { type: 'boolean', default: false },
+    'prompt-only': { type: 'boolean', default: false },
+  })
+  if (values.help) return emitSuccess(io, values.json, { help: SUB_HELP.derive }, SUB_HELP.derive)
+
+  if (values.options || positionals[0] === 'options') {
+    const catalog = buildXhsOptionsCatalog()
+    return emitSuccess(io, values.json, catalog, formatXhsOptionsHuman(catalog))
+  }
+
+  const dataDir = resolveDataDir(values, io.env)
+  const store = new Store(dataDir)
+  const tweakOverrides = parseXhsTweaksFlags(values)
+
+  // 子动作：免额外 API Key 闭环 — 接收外部 Agent 自生成的 deck.json，校验入库并导出 2× 高清 PNG
+  if (positionals[0] === 'apply') {
+    const usage = '用法：wechat-studio derive xhs apply <articleId|file.md|-> <deck.json|-> [--style <id>] [--design-prompt <text>] [--theme <preset>] [--decor <preset>] [--decor-scope <scope>] [--out-dir <dir>] [--no-png]'
+    const targetInput = positionals[1]
+    const deckInput = positionals[2]
+    if (!targetInput || !deckInput) throw new UsageError(usage)
+    if (targetInput === '-' && deckInput === '-') {
+      throw new UsageError('文章和 deck.json 不能同时从标准输入 - 读取。')
+    }
+    const styleRes = resolveXhsDesignPromptOption(values.style, values['design-prompt'])
+    if (!styleRes.ok) throw new UsageError(styleRes.error)
+    const { article, imported } = await resolveXhsTargetArticle(targetInput, store, io, { persistImport: true })
+    const rawDeck = await readJsonFile(deckInput, '小红书 deck JSON', io)
+    const record = await applyXhsDerivative(store, {
+      id: article.id,
+      payload: rawDeck,
+      designPrompt: styleRes.designPrompt,
+      tweaks: tweakOverrides,
+      root: dataDir,
+    })
+    let exported = null
+    if (values['out-dir']) {
+      const settings = await readSettings(dataDir)
+      exported = await exportXhsDeckToDir({
+        payload: record.payload,
+        author: settings.author || '',
+        tweaks: record.payload.tweaks || {},
+        outDir: values['out-dir'],
+        renderPng: !values['no-png'],
+        env: io.env,
+      })
+    }
+    const warnText = record.warnings?.length ? `\n\n提醒：\n${record.warnings.map(w => `- ${w}`).join('\n')}` : ''
+    const mediaSummary = (exported?.mediaFiles?.length)
+      ? [exported.pngFiles.length ? `PNG ${exported.pngFiles.length} 张（2× 高清）` : '', exported.gifFiles?.length ? `GIF ${exported.gifFiles.length} 张（动图）` : ''].filter(Boolean).join(' + ')
+      : exported?.pngSkippedReason
+    const exportText = exported
+      ? `\n\n已导出到：${exported.outDir}\n- 文案：${exported.postPath}\n- 预览：${exported.previewPath}\n- 图片：${mediaSummary}`
+      : '\n\n提示：加 --out-dir <dir> 可直接导出 2× 高清 PNG 与离线预览，或在插件「一稿多发」页查看。'
+    const human = `已应用并保存小红书图文（共 ${record.payload.cards.length} 页，稿件 ID：${article.id}）。${exportText}${warnText}`
+    return emitSuccess(io, values.json, {
+      id: article.id,
+      imported,
+      applied: true,
+      style: styleRes.style.id,
+      ...record,
+      ...(exported ? { exported } : {}),
+    }, human)
+  }
+
+  // 子动作：零模型成本重新渲染已有小红书卡片（支持换配色/换背景氛围装饰）
+  if (positionals[0] === 'render') {
+    const usage = '用法：wechat-studio derive xhs render <articleId> --out-dir <dir> [--theme <preset>] [--decor <preset>] [--decor-scope <scope>] [--no-png]'
+    const id = positionals[1]
+    if (!id || !values['out-dir']) throw new UsageError(usage)
+    const state = await store.read()
+    const article = state.articles.find(a => a.id === id)
+    if (!article) throw Object.assign(new Error(`找不到稿件：${id}`), { status: 404 })
+    const existing = article.derivatives?.xhs
+    if (!existing?.payload?.cards?.length) {
+      throw Object.assign(new Error(`稿件 ${id} 还没有已生成的小红书图文，请先运行 derive xhs 生成。`), { status: 404 })
+    }
+    let nextPayload = existing.payload
+    if (tweakOverrides) {
+      const mergedTweaks = normalizeXhsTweaks({ ...(existing.payload.tweaks || {}), ...tweakOverrides })
+      nextPayload = { ...existing.payload, tweaks: mergedTweaks }
+      await store.update(s => {
+        const target = s.articles.find(a => a.id === id)
+        if (target?.derivatives?.xhs?.payload) {
+          target.derivatives.xhs.payload.tweaks = mergedTweaks
+        }
+      })
+    }
+    const settings = await readSettings(dataDir)
+    const exported = await exportXhsDeckToDir({
+      payload: nextPayload,
+      author: settings.author || '',
+      tweaks: nextPayload.tweaks || {},
+      outDir: values['out-dir'],
+      renderPng: !values['no-png'],
+      env: io.env,
+    })
+    const renderMediaSummary = exported.mediaFiles?.length
+      ? [exported.pngFiles.length ? `PNG ${exported.pngFiles.length} 张（2× 高清）` : '', exported.gifFiles?.length ? `GIF ${exported.gifFiles.length} 张（动图）` : ''].filter(Boolean).join(' + ')
+      : exported.pngSkippedReason
+    const summary = [
+      `已重新渲染小红书卡片（共 ${nextPayload.cards.length} 页）到：${exported.outDir}`,
+      `文案：${exported.postPath}`,
+      `预览：${exported.previewPath}`,
+      exported.mediaFiles?.length
+        ? `图片：${renderMediaSummary}（${exported.mediaFiles[0]} 等）`
+        : `图片未生成：${exported.pngSkippedReason}`,
+    ].join('\n')
+    return emitSuccess(io, values.json, { id, exported, tweaks: nextPayload.tweaks || null }, summary)
+  }
+
+  const usage = '用法：wechat-studio derive xhs <articleId|file.md|-> [--style <id>] [--design-prompt <text>] [--ref-image <path>] [--theme <preset>] [--decor <preset>] [--decor-scope <scope>] [--out-dir <dir>] [--no-png] [--force] [--prompt-only]'
+  assertPositionals(positionals, 1, usage)
+  const targetInput = positionals[0]
+  if (!targetInput) throw new UsageError(usage)
+
+  const styleRes = resolveXhsDesignPromptOption(values.style, values['design-prompt'])
+  if (!styleRes.ok) throw new UsageError(styleRes.error)
+
+  const refPaths = Array.isArray(values['ref-image']) ? values['ref-image'] : []
+  if (refPaths.length > DERIVE_LIMITS.xhs.referenceImages) {
+    throw new UsageError(`参考图最多支持 ${DERIVE_LIMITS.xhs.referenceImages} 张，当前传入 ${refPaths.length} 张。`)
+  }
+  const referenceImages = await Promise.all(refPaths.map(readReferenceImageDataUrl))
+
+  if (values['prompt-only']) {
+    const { article } = await resolveXhsTargetArticle(targetInput, store, io, { persistImport: false })
+    const prepared = await prepareDerivePrompt(article, {
+      platform: 'xhs',
+      designPrompt: styleRes.designPrompt,
+      referenceImages,
+      root: dataDir,
+    })
+    const agentBundle = buildXhsAgentGenerateBundle({
+      article,
+      prepared,
+      styleRes,
+      tweakOverrides,
+      targetInput,
+      values,
+    })
+    const payload = {
+      promptOnly: true,
+      id: article.id,
+      platform: 'xhs',
+      style: styleRes.style.id,
+      designPrompt: prepared.designPrompt,
+      referenceImageCount: prepared.referenceImages.length,
+      ...(tweakOverrides ? { tweaks: tweakOverrides } : {}),
+      system: prepared.system,
+      user: prepared.user,
+      ...agentBundle,
+    }
+    return emitSuccess(io, values.json, payload, `${prepared.system}\n\n---\n\n${prepared.user}`)
+  }
+
+  const hasExplicitStyle = Boolean(values.style || values['design-prompt'] || refPaths.length > 0)
+  const hasExplicitTheme = Boolean(values.theme || values.preset)
+  const hasExplicitDecor = Boolean(values.decor)
+  const missingFields = []
+  if (!hasExplicitStyle) missingFields.push('style')
+  if (!hasExplicitTheme) missingFields.push('theme')
+  if (!hasExplicitDecor) missingFields.push('decor')
+
+  if (!values.yes && missingFields.length > 0) {
+    const catalog = buildXhsOptionsCatalog()
+    const pendingQuestions = catalog.requiredQuestions.filter(q => missingFields.includes(q.field))
+    const message = `还缺少 ${missingFields.length} 项必选偏好（${missingFields.join('、')}）。请严格按 requiredQuestions 向用户逐一问全剩余 ${pendingQuestions.length} 步，不要合并或省略；若提问卡片最多只能放 4 个按钮，请直接把每题 question 中自带的全量选项速查表展示给用户，并允许自由输入其他 ID 或自定义风格描述。全部确认后，请同时带上 --style（或 --design-prompt）、--theme、--decor（及可选 --decor-scope）重新执行本命令。`
+    const nextCommandExample = `wechat-studio derive xhs ${targetInput} --style monocle --theme editorial --decor silk-dots --decor-scope smart${values['out-dir'] ? ` --out-dir ${values['out-dir']}` : ' --out-dir ./xhs-out'}`
+    const human = `${message}\n\n${formatXhsOptionsHuman(catalog)}\n\n示例：\n  ${nextCommandExample}`
+    return emitSuccess(io, values.json, {
+      needsConfirmation: true,
+      code: 'NEEDS_STYLE_CONFIRMATION',
+      actionRequired: 'ask_user_3_steps',
+      missingFields,
+      message,
+      target: targetInput,
+      requiredQuestions: pendingQuestions,
+      options: catalog,
+      nextCommandExample,
+    }, human)
+  }
+
+  // 免额外 API Key 闭环：当外部 Agent 环境未配置 WECHAT_STUDIO_API_KEY 时，自动返回精绘提示词 + 内置原语包 + 原文配图 + apply 命令
+  const hasStandaloneLlm = Boolean(io.ctx || resolveStandaloneLlmConfig(io.env, {
+    model: values.model,
+    baseUrl: values['base-url'],
+  }).apiKey)
+  if (!hasStandaloneLlm) {
+    const { article } = await resolveXhsTargetArticle(targetInput, store, io, { persistImport: false })
+    const prepared = await prepareDerivePrompt(article, {
+      platform: 'xhs',
+      designPrompt: styleRes.designPrompt,
+      referenceImages,
+      root: dataDir,
+    })
+    const agentBundle = buildXhsAgentGenerateBundle({
+      article,
+      prepared,
+      styleRes,
+      tweakOverrides,
+      targetInput,
+      values,
+    })
+    const message = '当前环境未配置独立 CLI 模型 Key，请直接使用你自身的大模型按下方提示词、内置排版原语包与原文配图生成精绘 deck.json，再执行 applyCommand 一步入库并导出 2× 高清 PNG。'
+    const payload = {
+      mode: 'agent_generate',
+      code: 'AGENT_GENERATE_REQUIRED',
+      actionRequired: 'generate_deck_and_apply',
+      message,
+      id: article.id,
+      platform: 'xhs',
+      style: styleRes.style.id,
+      designPrompt: prepared.designPrompt,
+      referenceImageCount: prepared.referenceImages.length,
+      ...(tweakOverrides ? { tweaks: tweakOverrides } : {}),
+      system: prepared.system,
+      user: prepared.user,
+      ...agentBundle,
+    }
+    const human = `${message}\n\n${agentBundle.htmlDesignContract}${agentBundle.styleKit ? `\n\n${agentBundle.styleKit.guidance}` : ''}\n\n下一步命令：\n  ${agentBundle.applyCommand}`
+    return emitSuccess(io, values.json, payload, human)
+  }
+
+  const { article, imported } = await resolveXhsTargetArticle(targetInput, store, io, { persistImport: true })
+  const ctx = resolveCtx(io, values, secrets)
+  const record = await generateDerivative(ctx, store, {
+    id: article.id,
+    platform: 'xhs',
+    designPrompt: styleRes.designPrompt,
+    referenceImages,
+    confirmOverwrite: values.force,
+    root: dataDir,
+  })
+
+  let finalPayload = record.payload
+  if (tweakOverrides) {
+    const mergedTweaks = normalizeXhsTweaks({ ...(record.payload.tweaks || {}), ...tweakOverrides })
+    finalPayload = { ...record.payload, tweaks: mergedTweaks }
+    record.payload = finalPayload
+    await store.update(s => {
+      const target = s.articles.find(a => a.id === article.id)
+      if (target?.derivatives?.xhs?.payload) {
+        target.derivatives.xhs.payload.tweaks = mergedTweaks
+      }
+    })
+  }
+
+  let exported = null
+  if (values['out-dir']) {
+    const settings = await readSettings(dataDir)
+    exported = await exportXhsDeckToDir({
+      payload: finalPayload,
+      author: settings.author || '',
+      tweaks: finalPayload.tweaks || {},
+      outDir: values['out-dir'],
+      renderPng: !values['no-png'],
+      env: io.env,
+    })
+  }
+
+  const warnText = record.warnings?.length ? `\n\n提醒：\n${record.warnings.map(w => `- ${w}`).join('\n')}` : ''
+  const outline = finalPayload.cards.map((card, i) => `[${i + 1}/${finalPayload.cards.length} ${card.kind}] ${card.heading}${card.lines.length ? ` — ${card.lines.join(' / ')}` : ''}`).join('\n')
+  const genMediaSummary = (exported?.mediaFiles?.length)
+    ? [exported.pngFiles.length ? `PNG ${exported.pngFiles.length} 张（2× 高清）` : '', exported.gifFiles?.length ? `GIF ${exported.gifFiles.length} 张（动图）` : ''].filter(Boolean).join(' + ')
+    : exported?.pngSkippedReason
+  const exportText = exported
+    ? `\n\n已导出到：${exported.outDir}\n- 文案：${exported.postPath}\n- 预览：${exported.previewPath}\n- 图片：${genMediaSummary}`
+    : '\n\n提示：加 --out-dir <dir> 可直接导出 PNG 与离线预览，或在插件「一稿多发」页微调导出。'
+  const human = `${xhsClipboardText(finalPayload)}\n\n---\n卡片大纲：\n${outline}${exportText}${warnText}`
+  return emitSuccess(io, values.json, {
+    id: article.id,
+    imported,
+    style: styleRes.style.id,
+    ...record,
+    ...(exported ? { exported } : {}),
+  }, human)
 }
 
 async function handlePrep(argv, io, secrets) {

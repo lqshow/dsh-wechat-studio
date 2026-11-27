@@ -64,6 +64,72 @@ export const XHS_STYLE_KITS = [
   },
 ]
 
+export const XHS_DESIGN_STYLE_OPTIONS = Object.freeze([
+  {
+    id: 'auto',
+    label: '自由发挥',
+    tagline: 'AI 按文章题材定制',
+    designPrompt: '',
+  },
+  {
+    id: 'swiss',
+    label: '瑞士大字报 + 荧光笔',
+    tagline: '巨型锚点 · 荧光笔圈注',
+    designPrompt: '瑞士海报网格 × 编辑部荧光笔批注：每页只保留 1 个超大视觉锚点（巨型数字、超大关键词或对比结论），其余信息用开放式无边框条列自然展开；用内联 SVG 手绘荧光笔下划线、圆圈标注和极简箭头引导视线，绝不堆砌圆角白卡片和假仪表盘标签；尾页用浅色便签纸风格收尾。',
+  },
+  {
+    id: 'newyorker',
+    label: '复古科技报纸 / 纽约客',
+    tagline: '双线刊头 · 首字下沉 · 分栏',
+    designPrompt: '像《纽约客》特稿混搭早期苹果印刷广告：报纸分栏细线、顶部刊头日期与栏号、大幅呼吸留白、重点句用大号拉出引言（Pull Quote）加粗下划线强调；数据用极简横向条形图而非仪表盘方块；整体克制冷静、图文疏朗，尾页用「专栏结语 + 行动建议」浅底双栏收束。',
+  },
+  {
+    id: 'monocle',
+    label: 'Monocle 日系杂志',
+    tagline: '暖纸留白 · 竖排眉批 · 大页码',
+    designPrompt: '像《Monocle》或《知日》编辑部专题：大面积暖纸留白、粗细反差强烈的衬线标题与无衬线正文、用极细 1px 分割线和超大淡色页码取代圆角方框；穿插左侧竖排小字眉批、非对称 1:2 栏宽和极简内联 SVG 比例条；尾页用浅暖纸「编者按 / 书信」式收尾，绝不用黑底。',
+  },
+  {
+    id: 'manual',
+    label: '工业工具说明书',
+    tagline: 'UNIT 标签 · 巨型编号 · I/O',
+    designPrompt: '工业工具说明书风：巨型步骤编号、醒目标签、输入输出公式与规格参数栏',
+  },
+  {
+    id: 'notebook',
+    label: '红笔手账备课本',
+    tagline: '横线稿纸 · 微倾便签 · 勾选单',
+    designPrompt: '手账备课本风：笔记线条质感、圈画重点批注、微倾提醒便签与步骤清单',
+  },
+  {
+    id: 'tech',
+    label: '工程实测报告',
+    tagline: '终端日志 · 比例条 · 实测账本',
+    designPrompt: '工程实测报告风：对照表、指标仪表盘、代码终端窗与紧凑 Bento 矩阵',
+  },
+  {
+    id: 'editorial',
+    label: '编辑部杂志画报',
+    tagline: '衬线大标题 · 留白金句',
+    designPrompt: '杂志画报风：克制留白、衬线大标题、不对称双栏与大号金句页',
+  },
+])
+
+export function resolveXhsDesignPromptOption(styleId = '', customDesignPrompt = '') {
+  const cleanId = String(styleId || '').trim().toLowerCase()
+  const cleanCustom = String(customDesignPrompt || '').trim()
+  if (cleanId) {
+    const matched = XHS_DESIGN_STYLE_OPTIONS.find(item => item.id === cleanId)
+    if (!matched) {
+      const validIds = XHS_DESIGN_STYLE_OPTIONS.map(item => item.id).join(', ')
+      return { ok: false, error: `不支持的小红书设计风格：${styleId}（可选：${validIds}）` }
+    }
+    const combined = [matched.designPrompt, cleanCustom].filter(Boolean).join('\n')
+    return { ok: true, style: matched, designPrompt: combined }
+  }
+  return { ok: true, style: XHS_DESIGN_STYLE_OPTIONS[0], designPrompt: cleanCustom }
+}
+
 export function resolveXhsStyleKit(designPrompt = '', artDirection = null) {
   const haystack = [
     String(designPrompt || ''),

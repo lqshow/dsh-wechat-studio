@@ -1362,6 +1362,54 @@ export async function redesignXhsCard(ctx, store, { id, cardIndex, cardPrompt = 
   })
 }
 
+export async function applyXhsDerivative(store, {
+  id,
+  payload,
+  designPrompt = '',
+  tweaks = null,
+  root,
+} = {}) {
+  const dataDir = root ?? store.root
+  const settings = dataDir ? await readSettings(dataDir) : { fixedLines: [] }
+
+  return store.update(state => {
+    const article = findArticle(state, id)
+    const { blocks } = portableBlocks(article, { target: 'blog', fixedLines: settings.fixedLines })
+    const blockIds = blocks.map(block => block.id)
+    const sourceText = blocks.map(block => block.text).join('\n')
+
+    const mergedPayload = {
+      ...(payload && typeof payload === 'object' ? payload : {}),
+    }
+    if (designPrompt && !mergedPayload.designPrompt) {
+      mergedPayload.designPrompt = designPrompt
+    }
+    if (tweaks && typeof tweaks === 'object') {
+      mergedPayload.tweaks = { ...(mergedPayload.tweaks || {}), ...tweaks }
+    }
+
+    const normalized = normalizeXhs(mergedPayload, {
+      blockIds,
+      sourceText,
+      status: 400,
+      strictCardLength: false,
+    })
+    const { payload: cleanPayload, warnings } = splitPayloadAndWarnings(normalized)
+    if (!article.derivatives || typeof article.derivatives !== 'object') {
+      article.derivatives = {}
+    }
+    const record = {
+      generatedAt: new Date().toISOString(),
+      sourceHash: articleSourceHash(article),
+      payload: cleanPayload,
+      warnings,
+    }
+    article.derivatives.xhs = record
+    touch(article)
+    return record
+  })
+}
+
 export async function updateDerivative(store, { id, platform, payload, root } = {}) {
   if (!DERIVE_PLATFORMS.includes(platform)) {
     throw fail(`不支持的派生平台：${platform}（可选：${DERIVE_PLATFORMS.join('、')}）。`, 400)
